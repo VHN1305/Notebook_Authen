@@ -1,0 +1,50 @@
+{
+  "realm": "jhub",
+  "enabled": true,
+  "clients": [
+    {
+      "clientId": "jhub-1",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "2q4aDQuw0MckAbFBlhlo74eDsyZ8b9hJ",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": true,
+      "authorizationServicesEnabled": false,
+      "redirectUris": [
+        "http://localhost:8000/hub/oauth_callback",
+        "http://jhub:8000/hub/oauth_callback"
+      ],
+      "webOrigins": ["+"],
+      "attributes": {
+        "post.logout.redirect.uris": "/",
+        "access.token.lifespan": "300",
+        "client.secret.creation.time": "0"
+      },
+      "defaultClientScopes": ["web-origins", "acr", "profile", "roles", "email"],
+      "optionalClientScopes": ["address", "phone", "offline_access", "microprofile-jwt"]
+    }
+  ],
+  "users": [
+    {
+      "username": "testuser",
+      "enabled": true,
+      "email": "testuser@example.com",
+      "firstName": "Test",
+      "lastName": "User",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["user"],
+      "clientRoles": {},
+      "groups": []
+    }
+  ],
+  "roles": {},
+  "groups": []
+}

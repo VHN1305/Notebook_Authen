@@ -1,0 +1,36 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0
+    command: start-dev --import-realm
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=secret
+      - KC_HTTP_PORT=8080
+      - KC_HTTPS_PORT=8443
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+    volumes:
+      - ./keycloak/config:/opt/keycloak/data/import:ro
+    restart: unless-stopped
+
+  jhub:
+    build: ./jupyterhub/jupyterhub-server
+    hostname: jhub
+    environment:
+      - OAUTH_TLS_VERIFY=0
+      # Browser-facing URL (must be accessible from user's browser)
+      - OAUTH2_AUTHORIZE_URL=http://localhost:8080/realms/jhub/protocol/openid-connect/auth
+      # Server-to-server URLs (internal Docker network)
+      - OAUTH2_TOKEN_URL=http://keycloak:8080/realms/jhub/protocol/openid-connect/token
+      - OAUTH2_USERDATA_URL=http://keycloak:8080/realms/jhub/protocol/openid-connect/userinfo
+      - OAUTH_CLIENT_ID=jhub-1
+      - OAUTH_CLIENT_SECRET=2q4aDQuw0MckAbFBlhlo74eDsyZ8b9hJ
+      - OAUTH_CALLBACK_URL=http://localhost:8000/hub/oauth_callback
+      - JUPYTERHUB_CRYPT_KEY=ae49a5321f7841c0eb107ac20d298d99ee12df59fdd8732c86a4116ebbe796b7
+    ports:
+      - "8000:8000"
+      - "8002:8002"  # Papermill API
+    depends_on:
+      - keycloak
+    restart: unless-stopped

@@ -1,0 +1,10 @@
+jupyterhub==4.0.2
+jupyterlab
+notebook
+oauthenticator==16.3.0
+papermill
+ipywidgets
+fastapi
+uvicorn[standard]
+# add any spawner or jupyter extensions you need, e.g.:
+# dockerspawner

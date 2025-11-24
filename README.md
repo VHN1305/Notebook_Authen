@@ -1,8 +1,41 @@
-# JupyterHub + Keycloak (Docker Compose)
+# JupyterHub + Keycloak + Notebook Management (Docker Compose)
 
-This repository contains a minimal Docker Compose setup to run Keycloak (for OpenID Connect) and a JupyterHub instance configured to use Keycloak for authentication.
+This repository contains a Docker Compose setup to run:
+- **Keycloak** for OpenID Connect authentication
+- **JupyterHub** with Keycloak integration
+- **Papermill API** for notebook execution with parameters
+- **PostgreSQL Database** for notebook and parameter management
 
-Files added
+## 🆕 New Features: Database-Backed Notebook Management
+
+This system now includes a comprehensive notebook management API with PostgreSQL backend:
+
+- ✅ **Register notebooks** in database with metadata (tags, descriptions)
+- ✅ **Define parameters** for each notebook with validation rules
+- ✅ **Track execution history** with parameters used
+- ✅ **Query notebooks** by user, tags, or other criteria
+- ✅ **Execute notebooks** with custom parameters via REST API
+
+**Quick Start for Database Features:**
+```bash
+# One-command setup
+./setup_database.sh
+```
+
+**📚 Documentation:**
+- **[QUICK_START_DB.md](QUICK_START_DB.md)** - Quick reference for database features
+- **[DATABASE_MANAGEMENT_GUIDE.md](DATABASE_MANAGEMENT_GUIDE.md)** - Complete guide with examples
+- **[API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md)** - Original Papermill API reference
+
+**🔗 API Endpoints:**
+- JupyterHub: http://localhost:8000
+- Papermill API: http://localhost:8002
+- API Documentation: http://localhost:8002/docs
+- Keycloak Admin: http://localhost:8080
+
+---
+
+## Files Structure
 - `docker-compose.yml` — starts Keycloak and the `jhub` service (builds from `jupyterhub/jupyterhub-server`).
 - `jupyterhub/jupyterhub-server/Dockerfile` — image for JupyterHub.
 - `jupyterhub/jupyterhub-server/requirements.txt` — Python dependencies (jupyterhub, oauthenticator).

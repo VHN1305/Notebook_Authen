@@ -6,5 +6,10 @@ papermill
 ipywidgets
 fastapi
 uvicorn[standard]
+python-multipart
+# Database dependencies
+sqlalchemy>=2.0.0
+psycopg2-binary
+alembic
 # add any spawner or jupyter extensions you need, e.g.:
 # dockerspawner

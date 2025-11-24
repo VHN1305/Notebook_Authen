@@ -14,12 +14,40 @@
       "authorizationServicesEnabled": false,
       "redirectUris": [
         "http://localhost:8000/hub/oauth_callback",
-        "http://jhub:8000/hub/oauth_callback"
+        "http://jhub:8000/hub/oauth_callback",
+        "http://192.168.180.241:8000/hub/oauth_callback",
+        "http://*:8000/*"
       ],
       "webOrigins": ["+"],
       "attributes": {
         "post.logout.redirect.uris": "/",
         "access.token.lifespan": "300",
+        "client.secret.creation.time": "0"
+      },
+      "defaultClientScopes": ["web-origins", "acr", "profile", "roles", "email"],
+      "optionalClientScopes": ["address", "phone", "offline_access", "microprofile-jwt"]
+    },
+    {
+      "clientId": "superset-client",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "superset-secret-key-change-me",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": true,
+      "authorizationServicesEnabled": false,
+      "redirectUris": [
+        "http://localhost:8088/oauth-authorized/keycloak",
+        "http://superset:8088/oauth-authorized/keycloak",
+        "http://192.168.180.241:8088/oauth-authorized/keycloak",
+        "http://192.168.180.241:8088/*",
+        "http://*:8088/*"
+      ],
+      "webOrigins": ["+"],
+      "attributes": {
+        "post.logout.redirect.uris": "/",
+        "access.token.lifespan": "3600",
         "client.secret.creation.time": "0"
       },
       "defaultClientScopes": ["web-origins", "acr", "profile", "roles", "email"],
@@ -37,6 +65,40 @@
         {
           "type": "password",
           "value": "password",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["user"],
+      "clientRoles": {},
+      "groups": []
+    },
+    {
+      "username": "thuvm3",
+      "enabled": true,
+      "email": "thuvm3@example.com",
+      "firstName": "Minh Thu",
+      "lastName": "Vu",
+      "credentials": [
+        {
+          "type": "1",
+          "value": "1",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["user"],
+      "clientRoles": {},
+      "groups": []
+    },
+    {
+      "username": "huynv93",
+      "enabled": true,
+      "email": "huynv93@viettel.com.vn",
+      "firstName": "Van Huy",
+      "lastName": "Ngo",
+      "credentials": [
+        {
+          "type": "1",
+          "value": "1",
           "temporary": false
         }
       ],

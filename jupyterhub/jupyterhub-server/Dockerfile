@@ -35,6 +35,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 # Copy config and API files
 COPY jupyterhub_config.py /srv/jupyterhub/jupyterhub_config.py
 COPY set_params.py /srv/jupyterhub/set_params.py
+COPY database.py /srv/jupyterhub/database.py
+COPY init_db.py /srv/jupyterhub/init_db.py
 COPY start.sh /srv/jupyterhub/start.sh
 RUN chmod +x /srv/jupyterhub/start.sh
 

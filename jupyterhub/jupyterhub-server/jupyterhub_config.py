@@ -45,6 +45,19 @@ c.GenericOAuthenticator.allow_all = True
 # Enable verbose logging for OAuth
 c.GenericOAuthenticator.enable_auth_state = True
 
+# Cookie configuration to fix OAuth state issues
+# Set SameSite to Lax to allow OAuth callbacks from Keycloak
+c.JupyterHub.cookie_options = {
+    'samesite': 'Lax',
+    'secure': False,  # Set to True if using HTTPS
+}
+
+# Allow OAuth state cookies to work across different hosts
+c.GenericOAuthenticator.cookie_options = {
+    'samesite': 'Lax',
+    'secure': False,
+}
+
 # Optional: skip TLS verification for development (controlled by env var OAUTH_TLS_VERIFY)
 tls_verify = os.environ.get('OAUTH_TLS_VERIFY', '1')
 if tls_verify in ('0', 'false', 'False'):

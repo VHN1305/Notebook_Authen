@@ -11,24 +11,95 @@ Files added
 
 Quick setup
 
-1. Edit the Keycloak client secret in `keycloak/config/jhub-realm.json` or configure a client in the Keycloak admin UI after startup. Replace the placeholder `REPLACE_WITH_CLIENT_SECRET`.
+**Option 1: One-command complete setup (easiest)**
 
-2. Update `docker-compose.yml` with the same secret for `OAUTH_CLIENT_SECRET` in the `jhub` service.
+```bash
+./complete-setup.sh
+```
 
-3. (Optional) Set `JUPYTERHUB_CRYPT_KEY` to a random value (32+ bytes base64 or hex) for cookie/encryption security.
+This automated script will:
+- Detect and configure your server IP
+- Stop any existing containers
+- Start all services
+- Wait for Keycloak to be ready
+- Update Keycloak redirect URIs automatically
+- Display all access information
+
+**Option 2: Step-by-step automated setup**
+
+Run the setup script to automatically detect and configure your server IP:
+```bash
+./setup-host-ip.sh
+```
+
+This script will:
+- Detect available IP addresses on your server
+- Let you choose which one to use
+- Create the `.env` file with the correct configuration
+
+After running the setup script, start the services and update Keycloak:
+```bash
+sudo docker compose down
+sudo docker compose up -d
+# Wait for Keycloak to start (about 15 seconds)
+sleep 15
+./update-keycloak-redirect.sh
+```
+
+**Or use this one-liner:**
+```bash
+sudo docker compose down && sudo docker compose up -d && sleep 15 && ./update-keycloak-redirect.sh
+```
+
+**Option 3: Manual setup**
+
+1. **Configure the host IP address**: Create a `.env` file from the example:
+   ```bash
+   cp .env.example .env
+   ```
+   
+   Edit `.env` and set `HOST_IP` to your server's IP address or hostname:
+   ```bash
+   # For local access only
+   HOST_IP=localhost
+   
+   # For access from other computers on your network
+   HOST_IP=192.168.1.100  # Replace with your actual IP
+   
+   # Or use a hostname/domain
+   HOST_IP=myserver.example.com
+   ```
+   
+   **Important**: You can find your server's IP address using:
+   ```bash
+   # On Linux
+   hostname -I | awk '{print $1}'
+   # or
+   ip addr show | grep "inet " | grep -v 127.0.0.1
+   ```
+
+2. Edit the Keycloak client secret in `keycloak/config/jhub-realm.json` or configure a client in the Keycloak admin UI after startup. Replace the placeholder `REPLACE_WITH_CLIENT_SECRET`.
+
+3. Update `docker-compose.yml` with the same secret for `OAUTH_CLIENT_SECRET` in the `jhub` service.
+
+4. (Optional) Set `JUPYTERHUB_CRYPT_KEY` to a random value (32+ bytes base64 or hex) for cookie/encryption security.
 
 Build and run
 
 Run these commands from the repository root:
 
 ```bash
+# Make sure you have created and configured the .env file first!
+docker-compose down  # Stop existing containers if running
 docker-compose build
 docker-compose up -d
 ```
 
-Open Keycloak admin at http://localhost:8080 (user: `admin`, password: `secret`). The realm `jhub` and client should be imported automatically from `keycloak/config/` on startup. 
-
-Access JupyterHub at http://localhost:8000 and click "Sign in with Keycloak" to authenticate.
+**Accessing from other computers:**
+- Make sure the `.env` file has the correct `HOST_IP` set to your server's IP or hostname
+- Access JupyterHub at `http://YOUR_SERVER_IP:8000` (e.g., `http://192.168.1.100:8000`)
+- Access Keycloak admin at `http://YOUR_SERVER_IP:8080` (user: `admin`, password: `secret`)
+- Ensure firewall allows connections on ports 8000 and 8080
 
 Notes & troubleshooting
 

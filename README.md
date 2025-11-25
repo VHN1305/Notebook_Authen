@@ -1,15 +1,27 @@
-# JupyterHub + Keycloak + Notebook Management (Docker Compose)
+# JupyterHub + Keycloak + Superset + Notebook Management (Docker Compose)
 
 This repository contains a Docker Compose setup to run:
-- **Keycloak** for OpenID Connect authentication
-- **JupyterHub** with Keycloak integration
+- **Keycloak** for OpenID Connect authentication (SSO)
+- **JupyterHub** with Keycloak integration for notebook environment
+- **Apache Superset** with Keycloak OAuth for data visualization and dashboards
 - **Papermill API** for notebook execution with parameters
 - **PostgreSQL Database** for notebook and parameter management
 
-## 🆕 New Features: Database-Backed Notebook Management
+## 🌟 Key Features
 
-This system now includes a comprehensive notebook management API with PostgreSQL backend:
+### Authentication & Security
+- ✅ **Single Sign-On (SSO)** - One login for all services via Keycloak
+- ✅ **OAuth 2.0 / OpenID Connect** - Industry-standard authentication
+- ✅ **Multi-URL Access** - Works with both localhost and IP address access
+- ✅ **Custom OAuth State Handling** - Bypasses session cookie limitations for flexible deployment
 
+### Data Visualization with Superset
+- ✅ **Apache Superset 3.0** - Modern data visualization and business intelligence platform
+- ✅ **Keycloak Integration** - Automatic login with SSO
+- ✅ **Admin Role Assignment** - OAuth users get Admin privileges automatically
+- ✅ **Database Connectivity** - Connect to PostgreSQL and other data sources
+
+### Notebook Management
 - ✅ **Register notebooks** in database with metadata (tags, descriptions)
 - ✅ **Define parameters** for each notebook with validation rules
 - ✅ **Track execution history** with parameters used
@@ -22,27 +34,31 @@ This system now includes a comprehensive notebook management API with PostgreSQL
 ./setup_database.sh
 ```
 
+**🔗 Service Access URLs:**
+- **JupyterHub**: http://localhost:8000 or http://YOUR_IP:8000
+- **Superset**: http://localhost:8088 or http://YOUR_IP:8088
+- **Papermill API**: http://localhost:8002
+- **API Documentation**: http://localhost:8002/docs
+- **Keycloak Admin**: http://localhost:8080 (admin/secret)
+
 **📚 Documentation:**
 - **[QUICK_START_DB.md](QUICK_START_DB.md)** - Quick reference for database features
-- **[DATABASE_MANAGEMENT_GUIDE.md](DATABASE_MANAGEMENT_GUIDE.md)** - Complete guide with examples
+- **[SUPERSET_SETUP_GUIDE.md](SUPERSET_SETUP_GUIDE.md)** - Superset configuration and OAuth setup
 - **[API_QUICK_REFERENCE.md](API_QUICK_REFERENCE.md)** - Original Papermill API reference
 
-**🔗 API Endpoints:**
-- JupyterHub: http://localhost:8000
-- Papermill API: http://localhost:8002
-- API Documentation: http://localhost:8002/docs
-- Keycloak Admin: http://localhost:8080
-
----
-
 ## Files Structure
-- `docker-compose.yml` — starts Keycloak and the `jhub` service (builds from `jupyterhub/jupyterhub-server`).
-- `jupyterhub/jupyterhub-server/Dockerfile` — image for JupyterHub.
-- `jupyterhub/jupyterhub-server/requirements.txt` — Python dependencies (jupyterhub, oauthenticator).
-- `jupyterhub/jupyterhub-server/jupyterhub_config.py` — JupyterHub config using Keycloak OAuthenticator.
-- `keycloak/config/jhub-realm.json` — sample realm import for Keycloak.
+- `docker-compose.yml` — starts Keycloak, JupyterHub, and Superset services
+- `jupyterhub/jupyterhub-server/` — JupyterHub Docker image and configuration
+  - `Dockerfile` — JupyterHub container image
+  - `requirements.txt` — Python dependencies (jupyterhub, oauthenticator)
+  - `jupyterhub_config.py` — JupyterHub config using Keycloak OAuthenticator
+- `superset/` — Apache Superset configuration
+  - `Dockerfile` — Superset container with custom OAuth patches
+  - `superset_config.py` — Custom OAuth handling for multi-URL access
+  - `superset_init.sh` — Initialization script for database and admin user
+- `keycloak/config/jhub-realm.json` — Keycloak realm configuration with OAuth clients
 
-Quick setup
+## Quick Setup
 
 **Option 1: One-command complete setup (easiest)**
 
@@ -53,10 +69,16 @@ Quick setup
 This automated script will:
 - Detect and configure your server IP
 - Stop any existing containers
-- Start all services
+- Start all services (Keycloak, JupyterHub, Superset)
 - Wait for Keycloak to be ready
 - Update Keycloak redirect URIs automatically
 - Display all access information
+
+**What you get:**
+- JupyterHub at http://YOUR_IP:8000
+- Superset at http://YOUR_IP:8088
+- Keycloak at http://YOUR_IP:8080
+- All services use SSO authentication
 
 **Option 2: Step-by-step automated setup**
 
@@ -72,8 +94,8 @@ This script will:
 
 After running the setup script, start the services and update Keycloak:
 ```bash
-sudo docker compose down
-sudo docker compose up -d
+docker compose down
+HOST_IP=YOUR_IP docker compose up -d
 # Wait for Keycloak to start (about 15 seconds)
 sleep 15
 ./update-keycloak-redirect.sh
@@ -81,8 +103,10 @@ sleep 15
 
 **Or use this one-liner:**
 ```bash
-sudo docker compose down && sudo docker compose up -d && sleep 15 && ./update-keycloak-redirect.sh
+docker compose down && HOST_IP=YOUR_IP docker compose up -d && sleep 15 && ./update-keycloak-redirect.sh
 ```
+
+**Note:** Replace `YOUR_IP` with your actual IP address (e.g., 192.168.180.241)
 
 **Option 3: Manual setup**
 
@@ -123,41 +147,140 @@ Run these commands from the repository root:
 
 ```bash
 # Make sure you have created and configured the .env file first!
-docker-compose down  # Stop existing containers if running
-docker-compose build
-docker-compose up -d
+docker compose down  # Stop existing containers if running
+docker compose build
+HOST_IP=YOUR_IP docker compose up -d
 ```
 
-**Accessing from other computers:**
-- Make sure the `.env` file has the correct `HOST_IP` set to your server's IP or hostname
-- Access JupyterHub at `http://YOUR_SERVER_IP:8000` (e.g., `http://192.168.1.100:8000`)
-- Access Keycloak admin at `http://YOUR_SERVER_IP:8080` (user: `admin`, password: `secret`)
-- Ensure firewall allows connections on ports 8000 and 8080
+**Important:** Set `HOST_IP` environment variable to enable access from other computers:
+```bash
+# For localhost only
+docker compose up -d
 
-Notes & troubleshooting
+# For network access (replace with your actual IP)
+HOST_IP=192.168.180.241 docker compose up -d
+```
 
-- **Modern Keycloak**: This setup uses the newer `quay.io/keycloak/keycloak:23.0` image. The realm JSON is imported automatically from the `/opt/keycloak/data/import` directory on startup (using `--import-realm` flag).
+**Accessing the services:**
+- **JupyterHub**: http://YOUR_IP:8000 - Launch Jupyter notebooks
+- **Superset**: http://YOUR_IP:8088 - Create dashboards and visualizations  
+- **Keycloak Admin**: http://YOUR_IP:8080 - Manage users and authentication (admin/secret)
+- Ensure firewall allows connections on ports 8000, 8080, and 8088
 
-- **HTTP for local dev**: The configuration uses HTTP (not HTTPS) for local development. You'll see warnings like "JupyterHub seems to be served over an unsecured HTTP connection". This is expected for local testing. For production, you **must**:
+## Using Superset for Data Visualization
+
+1. **Login to Superset** at http://YOUR_IP:8088
+   - Click "Sign in with Keycloak"
+   - Use your Keycloak credentials (e.g., testuser/password)
+   - You'll be automatically logged in with Admin privileges
+
+2. **Connect to Database**
+   - Go to Settings → Database Connections
+   - Add a new database (PostgreSQL, MySQL, etc.)
+   - Create datasets from your tables
+
+3. **Create Charts and Dashboards**
+   - Navigate to Charts → Create new chart
+   - Select your dataset and visualization type
+   - Build interactive dashboards
+
+**Note:** OAuth users are automatically assigned Admin role for full access to all features.
+
+## Notes & Troubleshooting
+
+### General Configuration
+
+- **Modern Keycloak**: This setup uses `quay.io/keycloak/keycloak:23.0`. The realm JSON is imported automatically from `/opt/keycloak/data/import` on startup (using `--import-realm` flag).
+
+- **HTTP for local dev**: The configuration uses HTTP (not HTTPS) for local development. For production, you **must**:
   - Enable HTTPS with valid certificates
   - Update all URLs to use `https://`
   - Run behind a reverse proxy (nginx, Traefik, etc.)
 
-- **DNS and URL configuration**: The `docker-compose.yml` uses different URLs for different purposes:
-  - `OAUTH2_AUTHORIZE_URL`: Uses `http://localhost:8080` (browser-accessible)
-  - `OAUTH2_TOKEN_URL` and `OAUTH2_USERDATA_URL`: Use `http://keycloak:8080` (internal Docker network)
-  
-  This is required because your browser can't resolve the `keycloak` hostname (it only exists inside Docker's network), but JupyterHub server can communicate with Keycloak using the service name.
-
 - **TLS verification**: `OAUTH_TLS_VERIFY=0` is set for development. Remove or set to `1` in production with proper certificates.
 
-- Make sure the Keycloak client `jhub-1` has `Direct Access Grants`/`Authorization` enabled if needed and a proper `client secret` matching `OAUTH_CLIENT_SECRET`.
+### OAuth State Validation
 
-- Replace the development defaults (admin password, secrets) before deploying to production.
+This setup includes **custom OAuth state handling** to support multi-URL access (localhost + IP address):
 
-Next steps
+- **Problem**: Flask-AppBuilder's default OAuth stores state in session cookies that are domain-specific, causing "mismatching_state" errors when accessing via different URLs
+- **Solution**: Custom `AuthOAuthView` that bypasses state validation and manually completes OAuth flow
+- **Result**: SSO works seamlessly whether you access via localhost or IP address
 
-- If you want, I can:
-  1. Run `docker-compose up --build` here to start the services (I will only do that if you want me to), or
-  2. Tweak `jupyterhub_config.py` to automatically map Keycloak groups/roles to JupyterHub admin users, or
-  3. Add support for a proper HTTPS reverse proxy (Traefik / nginx) and generate self-signed certs for local test.
+**Technical Details:**
+- `superset/superset_config.py` contains:
+  - `patch_authlib_state_validation()` - Patches Authlib to bypass state checks
+  - `CustomAuthOAuthView` - Custom OAuth callback handler
+  - `CustomSecurityManager` - Registers custom view and handles user info
+
+### Superset-Specific Issues
+
+**"Forbidden" errors after login:**
+- Ensure OAuth users are assigned Admin role (handled automatically in this setup)
+- Check logs: `docker logs notebook_authen-superset-1 | grep CUSTOM`
+
+**OAuth callback not working:**
+- Verify `HOST_IP` environment variable is set correctly
+- Check Keycloak redirect URIs include your access URL
+- Monitor logs for 🔵 🟢 🔴 emoji markers showing OAuth flow steps
+
+**Database connection issues:**
+- Superset needs to initialize its metadata database on first run
+- Wait 20-30 seconds after starting for initialization to complete
+- Check logs: `docker logs notebook_authen-superset-1`
+
+### DNS and URL Configuration
+
+The `docker-compose.yml` uses different URLs for different purposes:
+- **Browser URLs**: Use `http://localhost:8080` or `http://YOUR_IP:8080` (browser-accessible)
+- **Internal URLs**: Use `http://keycloak:8080` (Docker network communication)
+
+This is required because browsers can't resolve the `keycloak` hostname (it only exists inside Docker's network), but services can communicate using Docker service names.
+
+### Security Considerations
+
+- Replace development defaults (admin password, secrets) before deploying to production
+- Keycloak clients should have proper `client_secret` matching environment variables
+- Enable HTTPS for production deployments
+- Use strong passwords and enable 2FA in Keycloak for production users
+
+## Architecture Overview
+
+```
+┌─────────────┐         ┌──────────────┐         ┌────────────────┐
+│   Browser   │────────▶│   Keycloak   │◀────────│  JupyterHub    │
+│  (User)     │         │   (SSO/Auth) │         │  (Notebooks)   │
+└─────────────┘         └──────────────┘         └────────────────┘
+                               │                          
+                               │                  ┌────────────────┐
+                               └─────────────────▶│   Superset     │
+                                                  │ (Dashboards)   │
+                                                  └────────────────┘
+                                                          │
+                                                          ▼
+                                                  ┌────────────────┐
+                                                  │   PostgreSQL   │
+                                                  │   (Database)   │
+                                                  └────────────────┘
+```
+
+**OAuth Flow:**
+1. User clicks "Sign in with Keycloak" on JupyterHub or Superset
+2. Redirected to Keycloak for authentication
+3. After login, Keycloak redirects back with authorization code
+4. Application exchanges code for access token (custom handler bypasses state validation)
+5. User info retrieved from Keycloak
+6. User automatically created/updated with appropriate roles
+7. User logged in and redirected to application home page
+
+## Next Steps
+
+- **View Superset documentation**: See [SUPERSET_SETUP_GUIDE.md](SUPERSET_SETUP_GUIDE.md) for detailed configuration
+- **Configure database connections**: Connect Superset to your data sources
+- **Create Keycloak users**: Add users and groups in Keycloak admin console
+- **Set up HTTPS**: Configure reverse proxy with SSL certificates for production
+- **Customize roles**: Map Keycloak groups to application roles
+
+## Contributing
+
+Feel free to submit issues and pull requests to improve this setup!

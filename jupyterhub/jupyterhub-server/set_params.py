@@ -1,5 +1,5 @@
 import subprocess
-from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, BackgroundTasks
 from pydantic import BaseModel, Field
 from fastapi.concurrency import run_in_threadpool
 from typing import Optional, Dict, Any, List
@@ -9,9 +9,13 @@ import json
 import shutil
 from datetime import datetime
 from sqlalchemy.orm import Session
+import nbformat
+import threading
 
 # Import database models and session
 from database import get_db, Notebook, NotebookParameter, NotebookExecution
+# Import MinIO client
+from minio_client import get_minio_client, MinIOClient
 
 app = FastAPI(
     title="JupyterHub Papermill API with Database Management",
@@ -134,13 +138,90 @@ class ExecutionHistoryResponse(BaseModel):
 
 # ==================== Helper Functions ====================
 
-def set_params(params: dict, input_path: str, output_path: str):
-    """Execute notebook with papermill"""
+def set_params(params: dict, input_path: str, output_path: str, kernel_name: str = "mlflow_kernel"):
+    """Execute notebook with papermill using specified kernel"""
     pm.execute_notebook(
         input_path,
         output_path,
-        parameters=params
+        parameters=params,
+        kernel_name=kernel_name
     )
+
+def execute_notebook_background(execution_id: int, params: dict, input_path: str, output_path: str, database_url: str):
+    """Execute notebook in background and update execution status in database"""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    
+    # Create new database session for this thread
+    engine = create_engine(database_url)
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    db = SessionLocal()
+    
+    started_at = datetime.utcnow()
+    
+    try:
+        # Update status to running
+        execution = db.query(NotebookExecution).filter(NotebookExecution.id == execution_id).first()
+        if execution:
+            execution.status = "running"
+            execution.started_at = started_at
+            db.commit()
+        
+        # Execute the notebook with MLflow kernel
+        pm.execute_notebook(
+            input_path,
+            output_path,
+            parameters=params,
+            kernel_name="mlflow_kernel"
+        )
+        
+        # Update status to success
+        completed_at = datetime.utcnow()
+        execution_time = int((completed_at - started_at).total_seconds())
+        
+        if execution:
+            execution.status = "success"
+            execution.completed_at = completed_at
+            execution.execution_time_seconds = execution_time
+            db.commit()
+            
+    except Exception as e:
+        # Update status to failed
+        completed_at = datetime.utcnow()
+        execution_time = int((completed_at - started_at).total_seconds())
+        
+        execution = db.query(NotebookExecution).filter(NotebookExecution.id == execution_id).first()
+        if execution:
+            execution.status = "failed"
+            execution.error_message = str(e)
+            execution.completed_at = completed_at
+            execution.execution_time_seconds = execution_time
+            db.commit()
+    
+    finally:
+        db.close()
+
+def check_first_cell_execution(output_path: str, timeout: int = 30) -> bool:
+    """Check if the first cell has been executed by monitoring the output notebook"""
+    import time
+    start_time = time.time()
+    
+    while time.time() - start_time < timeout:
+        if os.path.exists(output_path):
+            try:
+                with open(output_path, 'r') as f:
+                    nb = nbformat.read(f, as_version=4)
+                    # Check if any cell has been executed (has execution_count or outputs)
+                    for cell in nb.cells:
+                        if cell.cell_type == 'code':
+                            if cell.get('execution_count') is not None or len(cell.get('outputs', [])) > 0:
+                                return True
+            except (json.JSONDecodeError, Exception):
+                # File might be partially written, continue waiting
+                pass
+        time.sleep(0.5)
+    
+    return False
 
 @app.get("/")
 def root():
@@ -148,19 +229,31 @@ def root():
     return {
         "service": "JupyterHub Papermill API with Database Management",
         "version": "2.1.0",
+        "kernel": {
+            "default": "mlflow_kernel",
+            "display_name": "Python 3 (MLflow 2.8.0)",
+            "mlflow_version": "2.8.0"
+        },
         "endpoints": {
             "execution": {
-                "/health": "Health check",
+                "/health": "Health check (includes kernel status)",
                 "/run-notebook": "Execute notebook (simple)",
-                "/execute-notebook": "Execute notebook (full)",
-                "/execute": "Execute notebook (user-based)",
+                "/execute-notebook": "Execute notebook (async with MLflow kernel)",
+                "/execute": "Execute notebook (async, in-place, with MLflow kernel)",
                 "/list-notebooks/{username}": "List user notebooks"
             },
             "notebook_submission": {
                 "/submit-notebook": "Create/submit notebook to user directory",
                 "/copy-notebook": "Copy notebook from DB to user directory",
                 "/upload-notebook": "Upload notebook file to user directory",
-                "/create-from-template": "Create notebook from template with parameters"
+                "/create-from-template": "Create notebook from MinIO template with parameters"
+            },
+            "minio_templates": {
+                "/minio/upload-template": "Upload notebook to MinIO as template",
+                "/minio/list-templates": "List all template notebooks in MinIO",
+                "/minio/get-template": "Get template notebook info from MinIO",
+                "/minio/delete-template": "Delete template notebook from MinIO",
+                "/minio/download-url": "Get presigned download URL for template"
             },
             "database": {
                 "/db/notebooks": "List all notebooks in DB",
@@ -187,6 +280,7 @@ def health_check():
     - status: "healthy", "degraded", or "unhealthy"
     - papermill_available: Boolean indicating if papermill is installed
     - papermill_path: Path to papermill executable
+    - mlflow_kernel: Information about MLflow kernel
     - timestamp: Current server time
     
     Example response:
@@ -194,11 +288,16 @@ def health_check():
         "status": "healthy",
         "papermill_available": true,
         "papermill_path": "/usr/local/bin/papermill",
+        "mlflow_kernel": {
+            "installed": true,
+            "name": "mlflow_kernel",
+            "display_name": "Python 3 (MLflow 2.8.0)"
+        },
         "timestamp": "2025-11-21T10:30:00"
     }
     """
     try:
-        # Simple check to see if papermill is accessible
+        # Check if papermill is accessible
         result = subprocess.run(
             ["which", "papermill"],
             capture_output=True,
@@ -207,10 +306,46 @@ def health_check():
         
         papermill_available = result.returncode == 0
         
+        # Check if MLflow kernel is installed
+        kernel_check = subprocess.run(
+            ["jupyter", "kernelspec", "list"],
+            capture_output=True,
+            text=True
+        )
+        
+        mlflow_kernel_installed = "mlflow_kernel" in kernel_check.stdout
+        
+        # Get MLflow version if available
+        mlflow_version = None
+        if mlflow_kernel_installed:
+            try:
+                version_check = subprocess.run(
+                    ["/opt/mlflow_env/bin/python", "-c", "import mlflow; print(mlflow.__version__)"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if version_check.returncode == 0:
+                    mlflow_version = version_check.stdout.strip()
+            except Exception:
+                pass
+        
+        mlflow_kernel_info = {
+            "installed": mlflow_kernel_installed,
+            "name": "mlflow_kernel" if mlflow_kernel_installed else None,
+            "display_name": "Python 3 (MLflow 2.8.0)" if mlflow_kernel_installed else None,
+            "mlflow_version": mlflow_version
+        }
+        
+        overall_status = "healthy"
+        if not papermill_available or not mlflow_kernel_installed:
+            overall_status = "degraded"
+        
         return {
-            "status": "healthy" if papermill_available else "degraded",
+            "status": overall_status,
             "papermill_available": papermill_available,
             "papermill_path": result.stdout.strip() if papermill_available else None,
+            "mlflow_kernel": mlflow_kernel_info,
             "timestamp": datetime.now().isoformat()
         }
             
@@ -250,7 +385,7 @@ async def run_notebook(req: NotebookRequest):
 
     try:
         # Run papermill in thread (Papermill is blocking)
-        await run_in_threadpool(set_params, req.params, req.input_path, req.output_path)
+        await run_in_threadpool(set_params, req.params, req.input_path, req.output_path, "mlflow_kernel")
 
         return {
             "status": "success",
@@ -262,9 +397,9 @@ async def run_notebook(req: NotebookRequest):
         raise HTTPException(status_code=500, detail=str(e))
     
 @app.post("/execute-notebook")
-async def execute_notebook(req: NotebookRequest):
+async def execute_notebook(req: NotebookRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
-    Execute a notebook with parameters using Papermill (full version)
+    Execute a notebook with parameters using Papermill (async version)
     
     Parameters:
     - params: Dictionary of parameter key-value pairs to inject into notebook
@@ -274,8 +409,8 @@ async def execute_notebook(req: NotebookRequest):
     Behavior:
     - Validates input notebook exists
     - Creates output directory if needed
-    - Executes notebook with provided parameters
-    - Saves executed notebook to output path
+    - Starts notebook execution in background
+    - Returns immediately after first cell executes with link to monitor progress
     
     Example request body:
     {
@@ -285,9 +420,13 @@ async def execute_notebook(req: NotebookRequest):
     }
     
     Returns:
-    - status: "success"
+    - status: "started"
+    - execution_id: ID to track execution status
     - output_notebook: Path to executed notebook
-    - timestamp: Execution time
+    - notebook_url: URL to access notebook in JupyterLab
+    - status_url: URL to check execution status
+    - message: Info about background execution
+    - timestamp: Start time
     """
     try:
         # Validate input path exists
@@ -299,22 +438,72 @@ async def execute_notebook(req: NotebookRequest):
         if out_dir and not os.path.exists(out_dir):
             os.makedirs(out_dir, exist_ok=True)
 
-        # Run papermill in thread (Papermill is blocking)
-        await run_in_threadpool(set_params, req.params, req.input_path, req.output_path)
+        # Create execution record in database
+        execution = NotebookExecution(
+            notebook_id=None,  # Can be linked if you track notebook_id
+            username="api_user",  # Update if you have username in request
+            input_path=req.input_path,
+            output_path=req.output_path,
+            parameters_used=req.params,
+            status="pending",
+            started_at=datetime.utcnow()
+        )
+        db.add(execution)
+        db.commit()
+        db.refresh(execution)
+        
+        # Get database URL from environment
+        database_url = os.environ.get('DATABASE_URL', 'postgresql://mlflow:mlflow@host.docker.internal:5432/notebook_manager')
+        
+        # Start background execution in a separate thread
+        thread = threading.Thread(
+            target=execute_notebook_background,
+            args=(execution.id, req.params, req.input_path, req.output_path, database_url)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        # Wait for first cell to execute (with timeout)
+        first_cell_executed = await run_in_threadpool(check_first_cell_execution, req.output_path, 30)
+        
+        if not first_cell_executed:
+            # Even if first cell didn't execute yet, still return - execution is running
+            message = "Notebook execution started but first cell not yet completed. Check status URL for progress."
+        else:
+            message = "Notebook execution started successfully. First cell executed. Check status URL for progress."
+        
+        # Generate notebook URL (assumes JupyterHub is running)
+        # Extract username from path if possible
+        username = "unknown"
+        if "/home/" in req.output_path:
+            parts = req.output_path.split("/home/")[1].split("/")
+            if parts:
+                username = parts[0]
+        
+        # Generate relative path from user home
+        relative_path = req.output_path.replace(f"/home/{username}/", "")
+        notebook_url = f"http://localhost:8000/user/{username}/lab/tree/{relative_path}"
+        status_url = f"http://localhost:8002/db/executions/{execution.id}"
 
         return {
-            "status": "success",
+            "status": "started",
+            "execution_id": execution.id,
             "output_notebook": req.output_path,
+            "notebook_url": notebook_url,
+            "status_url": status_url,
+            "message": message,
             "timestamp": datetime.now().isoformat()
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/execute")
-async def execute_user_notebook(req: NotebookExecuteRequest):
+async def execute_user_notebook(req: NotebookExecuteRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
-    Execute a notebook in-place with parameters (overwrites original file)
+    Execute a notebook in-place with parameters (async version)
     
     Parameters:
     - username: JupyterLab username (optional, for path validation)
@@ -324,9 +513,8 @@ async def execute_user_notebook(req: NotebookExecuteRequest):
     Behavior:
     - Validates input_path exists and is a file
     - If username provided, ensures notebook is in user's home directory
-    - Executes notebook to temporary file
-    - Atomically replaces original with executed version
-    - Preserves original file ownership and permissions
+    - Starts notebook execution in background
+    - Returns immediately after first cell executes with link to monitor progress
     
     Example request body:
     {
@@ -336,12 +524,16 @@ async def execute_user_notebook(req: NotebookExecuteRequest):
     }
     
     Returns:
-    - status: "success"
+    - status: "started"
+    - execution_id: ID to track execution status
     - input_notebook: Path to the notebook
+    - notebook_url: URL to access notebook in JupyterLab
+    - status_url: URL to check execution status
     - parameters: Parameters that were injected
-    - timestamp: Execution time
+    - message: Info about background execution
+    - timestamp: Start time
     
-    Note: This endpoint modifies the original notebook file!
+    Note: This endpoint modifies the original notebook file in-place!
     """
     import tempfile
     try:
@@ -352,11 +544,18 @@ async def execute_user_notebook(req: NotebookExecuteRequest):
             raise HTTPException(status_code=404, detail=f"Input notebook not found: {input_path}")
 
         # If username provided, ensure input_path is within the user's home directory
+        username = req.username or "unknown"
         if req.username:
             user_home = os.path.realpath(f"/home/{req.username}")
             real_input = os.path.realpath(input_path)
             if not real_input.startswith(user_home + os.sep) and real_input != user_home:
                 raise HTTPException(status_code=403, detail="Input path is not inside the user's home directory")
+        else:
+            # Try to extract username from path
+            if "/home/" in input_path:
+                parts = input_path.split("/home/")[1].split("/")
+                if parts:
+                    username = parts[0]
 
         # Prepare temporary output path in same directory
         input_dir = os.path.dirname(input_path)
@@ -369,31 +568,119 @@ async def execute_user_notebook(req: NotebookExecuteRequest):
         original_gid = stat_info.st_gid
         original_mode = stat_info.st_mode
 
-        try:
-            # Execute into temporary file (blocking call in thread)
-            await run_in_threadpool(set_params, req.parameters or {}, input_path, tmp_path)
+        # Create execution record in database
+        execution = NotebookExecution(
+            notebook_id=None,
+            username=username,
+            input_path=input_path,
+            output_path=tmp_path,
+            parameters_used=req.parameters or {},
+            status="pending",
+            started_at=datetime.utcnow()
+        )
+        db.add(execution)
+        db.commit()
+        db.refresh(execution)
+        
+        # Get database URL from environment
+        database_url = os.environ.get('DATABASE_URL', 'postgresql://mlflow:mlflow@host.docker.internal:5432/notebook_manager')
+        
+        # Define a wrapper function for in-place execution
+        def execute_inplace_background(execution_id: int, params: dict, input_path: str, tmp_path: str, 
+                                      original_uid: int, original_gid: int, original_mode: int, database_url: str):
+            from sqlalchemy import create_engine
+            from sqlalchemy.orm import sessionmaker
+            
+            engine = create_engine(database_url)
+            SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+            db_local = SessionLocal()
+            
+            started_at = datetime.utcnow()
+            
+            try:
+                # Update status to running
+                exec_record = db_local.query(NotebookExecution).filter(NotebookExecution.id == execution_id).first()
+                if exec_record:
+                    exec_record.status = "running"
+                    exec_record.started_at = started_at
+                    db_local.commit()
+                
+                # Execute notebook to temp file with MLflow kernel
+                pm.execute_notebook(input_path, tmp_path, parameters=params, kernel_name="mlflow_kernel")
+                
+                # Set ownership and permissions
+                os.chown(tmp_path, original_uid, original_gid)
+                os.chmod(tmp_path, original_mode)
+                
+                # Replace original file atomically
+                os.replace(tmp_path, input_path)
+                
+                # Update status to success
+                completed_at = datetime.utcnow()
+                execution_time = int((completed_at - started_at).total_seconds())
+                
+                if exec_record:
+                    exec_record.status = "success"
+                    exec_record.output_path = input_path  # Update to final path
+                    exec_record.completed_at = completed_at
+                    exec_record.execution_time_seconds = execution_time
+                    db_local.commit()
+                    
+            except Exception as e:
+                # Cleanup temp file
+                if os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
+                
+                # Update status to failed
+                completed_at = datetime.utcnow()
+                execution_time = int((completed_at - started_at).total_seconds())
+                
+                exec_record = db_local.query(NotebookExecution).filter(NotebookExecution.id == execution_id).first()
+                if exec_record:
+                    exec_record.status = "failed"
+                    exec_record.error_message = str(e)
+                    exec_record.completed_at = completed_at
+                    exec_record.execution_time_seconds = execution_time
+                    db_local.commit()
+            
+            finally:
+                db_local.close()
+        
+        # Start background execution
+        thread = threading.Thread(
+            target=execute_inplace_background,
+            args=(execution.id, req.parameters or {}, input_path, tmp_path, 
+                  original_uid, original_gid, original_mode, database_url)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        # Wait for first cell to execute
+        first_cell_executed = await run_in_threadpool(check_first_cell_execution, tmp_path, 30)
+        
+        if not first_cell_executed:
+            message = "Notebook execution started but first cell not yet completed. Check status URL for progress."
+        else:
+            message = "Notebook execution started successfully. First cell executed. Check status URL for progress."
+        
+        # Generate URLs
+        relative_path = input_path.replace(f"/home/{username}/", "")
+        notebook_url = f"http://localhost:8000/user/{username}/lab/tree/{relative_path}"
+        status_url = f"http://localhost:8002/db/executions/{execution.id}"
 
-            # Set ownership and permissions on temp file to match original
-            os.chown(tmp_path, original_uid, original_gid)
-            os.chmod(tmp_path, original_mode)
-
-            # Replace the original file atomically
-            os.replace(tmp_path, input_path)
-
-            return {
-                "status": "success",
-                "input_notebook": input_path,
-                "parameters": req.parameters,
-                "timestamp": datetime.now().isoformat()
-            }
-
-        finally:
-            # Cleanup temp file if it still exists
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
+        return {
+            "status": "started",
+            "execution_id": execution.id,
+            "input_notebook": input_path,
+            "notebook_url": notebook_url,
+            "status_url": status_url,
+            "parameters": req.parameters,
+            "message": message,
+            "timestamp": datetime.now().isoformat()
+        }
 
     except HTTPException:
         raise
@@ -1463,24 +1750,26 @@ async def upload_notebook(
 @app.post("/create-from-template")
 async def create_notebook_from_template(
     username: str,
-    template_notebook_id: int,
+    template_name: str,
     new_name: str,
     parameters: Optional[Dict[str, Any]] = None,
     directory: str = "notebooks",
+    save_to_db: bool = True,
     db: Session = Depends(get_db)
 ):
     """
-    Create a personalized notebook from a template with pre-filled parameters
+    Create a personalized notebook from a MinIO template with pre-filled parameters
     
     Parameters:
     - username: Target JupyterLab username (query parameter, required)
-    - template_notebook_id: ID of template notebook in database (query parameter, required)
+    - template_name: Name of template notebook in MinIO (query parameter, required)
     - new_name: Filename for new notebook (query parameter, required)
     - directory: Subdirectory in user's home (query parameter, default: "notebooks")
     - parameters: Dictionary of parameter values to inject (request body, optional)
+    - save_to_db: Register notebook in database (query parameter, default: true)
     
     Example request:
-    POST /create-from-template?username=student1&template_notebook_id=10&new_name=student1_hw.ipynb&directory=assignments
+    POST /create-from-template?username=student1&template_name=ml_template.ipynb&new_name=student1_hw.ipynb&directory=assignments
     Content-Type: application/json
     
     {
@@ -1491,9 +1780,11 @@ async def create_notebook_from_template(
     }
     
     Behavior:
-    - Copies template notebook from database
+    - Downloads template notebook from MinIO
     - If parameters provided, injects them as a code cell at the beginning
     - Parameter cell is tagged with "parameters" for Papermill compatibility
+    - Saves to user's JupyterLab directory
+    - Optionally registers in database
     - Sets proper file ownership and permissions
     
     Use cases:
@@ -1503,23 +1794,20 @@ async def create_notebook_from_template(
     
     Returns:
     - status: "success"
-    - template_id, template_name
+    - template_name: Name of template used
     - username, new_notebook_path, new_notebook_name
     - parameters_applied: Dictionary of injected parameters
+    - saved_to_db: Whether notebook was registered in database
+    - db_entry_id: Database ID if saved
     - timestamp
     
     Errors:
-    - 404: Template not found or user does not exist
+    - 404: Template not found in MinIO or user does not exist
     - 400: Notebook with new_name already exists
     """
     try:
-        # Get template notebook
-        template = db.query(Notebook).filter(Notebook.id == template_notebook_id).first()
-        if not template:
-            raise HTTPException(status_code=404, detail="Template notebook not found")
-        
-        if not os.path.exists(template.file_path):
-            raise HTTPException(status_code=404, detail="Template file not found")
+        # Get MinIO client
+        minio_client = get_minio_client()
         
         # Validate user
         user_home = f"/home/{username}"
@@ -1545,14 +1833,19 @@ async def create_notebook_from_template(
                 detail=f"Notebook '{new_name}' already exists"
             )
         
-        # Copy template
-        shutil.copy2(template.file_path, target_path)
+        # Download template from MinIO
+        try:
+            notebook_data = minio_client.get_notebook_content(template_name)
+        except FileNotFoundError:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Template notebook '{template_name}' not found in MinIO"
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
         
         # If parameters provided, add them as a code cell at the beginning
         if parameters:
-            with open(target_path, 'r') as f:
-                notebook_data = json.load(f)
-            
             # Create parameters cell
             param_cell = {
                 "cell_type": "code",
@@ -1571,25 +1864,44 @@ async def create_notebook_from_template(
             
             # Insert as first cell
             notebook_data["cells"].insert(0, param_cell)
-            
-            # Write back
-            with open(target_path, 'w') as f:
-                json.dump(notebook_data, f, indent=2)
+        
+        # Write notebook to user directory
+        with open(target_path, 'w') as f:
+            json.dump(notebook_data, f, indent=2)
         
         # Set ownership
         stat_info = os.stat(user_home)
         os.chown(target_path, stat_info.st_uid, stat_info.st_gid)
         os.chmod(target_path, 0o644)
         
+        # Save to database if requested
+        db_entry = None
+        if save_to_db:
+            try:
+                db_entry = Notebook(
+                    name=new_name,
+                    file_path=target_path,
+                    username=username,
+                    description=f"Created from template: {template_name}",
+                    tags=["from-template", template_name.replace('.ipynb', '')],
+                    notebook_metadata=notebook_data.get("metadata", {})
+                )
+                db.add(db_entry)
+                db.commit()
+                db.refresh(db_entry)
+            except Exception as e:
+                print(f"Warning: Failed to save to database: {e}")
+        
         return {
             "status": "success",
-            "message": "Notebook created from template",
-            "template_id": template_notebook_id,
-            "template_name": template.name,
+            "message": "Notebook created from MinIO template",
+            "template_name": template_name,
             "username": username,
             "new_notebook_path": target_path,
             "new_notebook_name": new_name,
             "parameters_applied": parameters or {},
+            "saved_to_db": save_to_db and db_entry is not None,
+            "db_entry_id": db_entry.id if db_entry else None,
             "timestamp": datetime.now().isoformat()
         }
         
@@ -1598,3 +1910,366 @@ async def create_notebook_from_template(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create notebook from template: {str(e)}")
 
+
+# ==================== MinIO Template Management Endpoints ====================
+
+@app.post("/minio/upload-template")
+async def upload_template_to_minio(
+    file: UploadFile = File(...),
+    template_name: Optional[str] = None,
+    category: Optional[str] = None,
+    description: Optional[str] = None,
+    save_to_db: bool = True,
+    db: Session = Depends(get_db)
+):
+    """
+    Upload a notebook to MinIO as a template
+    
+    Parameters:
+    - file: The .ipynb file to upload (multipart form data, required)
+    - template_name: Custom name for template (optional, uses filename if not provided)
+    - category: Template category/folder (optional, e.g., "ml", "data-analysis")
+    - description: Template description (optional)
+    - save_to_db: Also register in database (query parameter, default: true)
+    
+    Example cURL request:
+    curl -X POST "http://localhost:8002/minio/upload-template?category=ml&description=ML%20Template" \
+      -F "file=@/path/to/template.ipynb" \
+      -F "template_name=ml_template.ipynb"
+    
+    Behavior:
+    - Validates notebook JSON structure
+    - Uploads to MinIO bucket: notebook-templates
+    - Optionally stores metadata in PostgreSQL
+    - Supports categorization via folders
+    
+    Returns:
+    - status: "success"
+    - template_name: Name in MinIO
+    - minio_url: MinIO object URL
+    - size: File size in bytes
+    - saved_to_db: Whether metadata was saved to database
+    - db_entry_id: Database ID if saved
+    - timestamp
+    
+    Errors:
+    - 400: Invalid notebook file or JSON structure
+    """
+    try:
+        # Validate file is a notebook
+        filename = file.filename
+        if not filename or not filename.endswith('.ipynb'):
+            raise HTTPException(
+                status_code=400,
+                detail="File must be a Jupyter notebook (.ipynb)"
+            )
+        
+        # Determine template name
+        if not template_name:
+            template_name = filename
+        elif not template_name.endswith('.ipynb'):
+            template_name += '.ipynb'
+        
+        # Add category prefix if provided
+        if category:
+            template_name = f"{category}/{template_name}"
+        
+        # Read and validate notebook content
+        content = await file.read()
+        try:
+            notebook_data = json.loads(content)
+            if "cells" not in notebook_data or "metadata" not in notebook_data:
+                raise ValueError("Invalid notebook structure - missing 'cells' or 'metadata'")
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON format in notebook file")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        
+        # Save to temporary file
+        import tempfile
+        fd, temp_path = tempfile.mkstemp(suffix='.ipynb')
+        try:
+            with os.fdopen(fd, 'wb') as tmp:
+                tmp.write(content)
+            
+            # Upload to MinIO
+            minio_client = get_minio_client()
+            
+            metadata = {}
+            if description:
+                metadata['description'] = description
+            if category:
+                metadata['category'] = category
+            
+            upload_result = minio_client.upload_notebook(
+                temp_path,
+                template_name,
+                metadata=metadata
+            )
+            
+            # Save to database if requested
+            db_entry = None
+            if save_to_db:
+                try:
+                    db_entry = Notebook(
+                        name=template_name,
+                        file_path=f"minio://{upload_result['bucket']}/{upload_result['object_name']}",
+                        username="system",
+                        description=description or f"Template: {template_name}",
+                        tags=["template", category] if category else ["template"],
+                        notebook_metadata={
+                            "minio_bucket": upload_result['bucket'],
+                            "minio_object": upload_result['object_name'],
+                            "etag": upload_result['etag'],
+                            "category": category
+                        }
+                    )
+                    db.add(db_entry)
+                    db.commit()
+                    db.refresh(db_entry)
+                except Exception as e:
+                    print(f"Warning: Failed to save to database: {e}")
+            
+            return {
+                "status": "success",
+                "message": "Template uploaded to MinIO successfully",
+                "template_name": template_name,
+                "minio_url": f"minio://{upload_result['bucket']}/{upload_result['object_name']}",
+                "bucket": upload_result['bucket'],
+                "object_name": upload_result['object_name'],
+                "etag": upload_result['etag'],
+                "size": upload_result['size'],
+                "category": category,
+                "saved_to_db": save_to_db and db_entry is not None,
+                "db_entry_id": db_entry.id if db_entry else None,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+        finally:
+            # Cleanup temp file
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to upload template: {str(e)}")
+
+
+@app.get("/minio/list-templates")
+def list_minio_templates(
+    category: Optional[str] = None
+):
+    """
+    List all template notebooks in MinIO
+    
+    Query Parameters:
+    - category: Filter by category/folder (optional)
+    
+    Example requests:
+    GET /minio/list-templates
+    GET /minio/list-templates?category=ml
+    
+    Returns:
+    - templates: Array of template objects with:
+        * name: Template name in MinIO
+        * size: File size in bytes
+        * last_modified: Last modification timestamp
+        * etag: ETag for version tracking
+    - count: Total number of templates
+    - category: Category filter applied (if any)
+    """
+    try:
+        minio_client = get_minio_client()
+        
+        prefix = f"{category}/" if category else ""
+        templates = minio_client.list_notebooks(prefix=prefix)
+        
+        return {
+            "status": "success",
+            "templates": templates,
+            "count": len(templates),
+            "category": category,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list templates: {str(e)}")
+
+
+@app.get("/minio/get-template/{template_name:path}")
+def get_template_info(template_name: str):
+    """
+    Get metadata for a specific template notebook in MinIO
+    
+    Parameters:
+    - template_name: Name of template in MinIO (path parameter, can include folders)
+    
+    Example requests:
+    GET /minio/get-template/ml_template.ipynb
+    GET /minio/get-template/ml/classification_template.ipynb
+    
+    Returns:
+    - name: Template name
+    - size: File size in bytes
+    - etag: ETag for version tracking
+    - last_modified: Last modification timestamp
+    - content_type: MIME type
+    - metadata: Additional metadata stored with template
+    - exists: Whether template exists
+    
+    Errors:
+    - 404: Template not found
+    """
+    try:
+        minio_client = get_minio_client()
+        
+        if not minio_client.notebook_exists(template_name):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Template '{template_name}' not found in MinIO"
+            )
+        
+        metadata = minio_client.get_notebook_metadata(template_name)
+        
+        return {
+            "status": "success",
+            "template": metadata,
+            "exists": True,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get template info: {str(e)}")
+
+
+@app.delete("/minio/delete-template/{template_name:path}")
+def delete_template_from_minio(
+    template_name: str,
+    delete_from_db: bool = True,
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a template notebook from MinIO
+    
+    Parameters:
+    - template_name: Name of template to delete (path parameter)
+    - delete_from_db: Also delete from database if exists (query parameter, default: true)
+    
+    Example requests:
+    DELETE /minio/delete-template/old_template.ipynb
+    DELETE /minio/delete-template/ml/deprecated_template.ipynb?delete_from_db=false
+    
+    Returns:
+    - status: "success"
+    - template_name: Name of deleted template
+    - deleted_from_minio: Boolean
+    - deleted_from_db: Boolean
+    - timestamp
+    
+    Errors:
+    - 404: Template not found
+    """
+    try:
+        minio_client = get_minio_client()
+        
+        # Check if exists
+        if not minio_client.notebook_exists(template_name):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Template '{template_name}' not found in MinIO"
+            )
+        
+        # Delete from MinIO
+        deleted_minio = minio_client.delete_notebook(template_name)
+        
+        # Delete from database if requested
+        deleted_db = False
+        if delete_from_db:
+            try:
+                # Find notebook by name or minio path
+                minio_path = f"minio://notebook-templates/{template_name}"
+                db_notebook = db.query(Notebook).filter(
+                    (Notebook.name == template_name) | 
+                    (Notebook.file_path == minio_path)
+                ).first()
+                
+                if db_notebook:
+                    db.delete(db_notebook)
+                    db.commit()
+                    deleted_db = True
+            except Exception as e:
+                print(f"Warning: Failed to delete from database: {e}")
+        
+        return {
+            "status": "success",
+            "message": "Template deleted successfully",
+            "template_name": template_name,
+            "deleted_from_minio": deleted_minio,
+            "deleted_from_db": deleted_db,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete template: {str(e)}")
+
+
+@app.get("/minio/download-url/{template_name:path}")
+def get_template_download_url(
+    template_name: str,
+    expires: int = 3600
+):
+    """
+    Generate a presigned download URL for a template notebook
+    
+    Parameters:
+    - template_name: Name of template in MinIO (path parameter)
+    - expires: URL expiration time in seconds (query parameter, default: 3600 = 1 hour)
+    
+    Example requests:
+    GET /minio/download-url/ml_template.ipynb
+    GET /minio/download-url/ml/classification_template.ipynb?expires=7200
+    
+    Returns:
+    - status: "success"
+    - template_name: Template name
+    - download_url: Presigned URL for direct download
+    - expires_in: Expiration time in seconds
+    - expires_at: Expiration timestamp
+    
+    Note: The presigned URL allows direct download without authentication
+    
+    Errors:
+    - 404: Template not found
+    """
+    try:
+        minio_client = get_minio_client()
+        
+        if not minio_client.notebook_exists(template_name):
+            raise HTTPException(
+                status_code=404,
+                detail=f"Template '{template_name}' not found in MinIO"
+            )
+        
+        download_url = minio_client.get_notebook_url(template_name, expires=expires)
+        
+        from datetime import timedelta
+        expires_at = datetime.now() + timedelta(seconds=expires)
+        
+        return {
+            "status": "success",
+            "template_name": template_name,
+            "download_url": download_url,
+            "expires_in": expires,
+            "expires_at": expires_at.isoformat(),
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate download URL: {str(e)}")

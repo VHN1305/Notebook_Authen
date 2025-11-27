@@ -7,6 +7,9 @@ ipywidgets
 fastapi
 uvicorn[standard]
 python-multipart
+nbformat
+# MinIO for template notebook storage
+minio>=7.1.0
 # Database dependencies
 sqlalchemy>=2.0.0
 psycopg2-binary

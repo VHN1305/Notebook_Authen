@@ -3,6 +3,16 @@ set -e
 
 echo "🚀 Starting JupyterHub services..."
 
+# Verify MLflow kernel is available
+echo "🔍 Checking MLflow kernel..."
+if [ -f /opt/.mlflow_kernel_ready ]; then
+    echo "✅ MLflow kernel is ready"
+    jupyter kernelspec list | grep mlflow_kernel || echo "⚠️  Warning: mlflow_kernel not found"
+else
+    echo "⚠️  MLflow kernel not set up, running setup..."
+    /srv/jupyterhub/setup_kernel.sh
+fi
+
 # Start the FastAPI service in the background on port 8002
 echo "📡 Starting Papermill API service on port 8002..."
 uvicorn set_params:app --host 0.0.0.0 --port 8002 --log-level info &

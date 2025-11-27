@@ -36,9 +36,15 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY jupyterhub_config.py /srv/jupyterhub/jupyterhub_config.py
 COPY set_params.py /srv/jupyterhub/set_params.py
 COPY database.py /srv/jupyterhub/database.py
+COPY minio_client.py /srv/jupyterhub/minio_client.py
 COPY init_db.py /srv/jupyterhub/init_db.py
 COPY start.sh /srv/jupyterhub/start.sh
-RUN chmod +x /srv/jupyterhub/start.sh
+COPY setup_kernel.sh /srv/jupyterhub/setup_kernel.sh
+COPY kernel_requirements.txt /srv/jupyterhub/kernel_requirements.txt
+RUN chmod +x /srv/jupyterhub/start.sh /srv/jupyterhub/setup_kernel.sh
+
+# Set up the default MLflow kernel
+RUN /srv/jupyterhub/setup_kernel.sh
 
 # Create directory for user notebooks
 RUN mkdir -p /home && chmod 755 /home

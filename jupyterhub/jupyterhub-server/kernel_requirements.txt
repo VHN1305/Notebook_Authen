@@ -1,0 +1,57 @@
+# MLflow Kernel Requirements
+# This file defines all packages installed in the default kernel
+# Edit this file to add/update packages, then rebuild the container
+
+# Core MLflow (fixed version)
+mlflow==2.8.0
+
+# Jupyter kernel support
+ipykernel>=6.0.0
+ipywidgets>=8.0.0
+
+# Data Science Libraries
+numpy>=1.24.0
+pandas>=2.0.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+scipy>=1.10.0
+scikit-learn>=1.3.0
+
+# Database support
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+
+# Utilities
+requests>=2.31.0
+python-dateutil>=2.8.0
+pytz>=2023.3
+
+# Additional MLflow dependencies
+pyyaml>=6.0
+click>=8.0
+cloudpickle>=2.0.0
+entrypoints>=0.4
+gitpython>=3.1.0
+protobuf>=4.0.0
+
+# Data visualization
+plotly>=5.14.0
+bokeh>=3.1.0
+
+# Machine Learning extras
+# xgboost>=1.7.0
+# lightgbm>=3.3.0
+# catboost>=1.2.0
+
+# Statistical analysis
+statsmodels>=0.14.0
+
+# Feature engineering
+featuretools>=1.26.0
+
+# Experiment tracking helpers
+tensorboard>=2.13.0
+
+# File handling
+openpyxl>=3.1.0
+xlrd>=2.0.0

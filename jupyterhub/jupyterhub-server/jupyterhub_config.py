@@ -20,6 +20,15 @@ callback_url = os.environ.get('OAUTH_CALLBACK_URL')
 if not (authorize_url and token_url and userdata_url and client_id and client_secret):
     raise RuntimeError('Missing required OIDC environment variables for Keycloak')
 
+
+# Bắt buộc dùng thằng này
+# c.GenericOAuthenticator.auto_login = True
+
+# (tuỳ chọn) đặt tên service cho rõ, dù auto_login bật thì cũng ít khi thấy
+# c.GenericOAuthenticator.login_service = "Keycloak"
+
+# # Có thể giữ lại dòng này, không sao:
+# c.Authenticator.auto_login = True
 c.GenericOAuthenticator.authorize_url = authorize_url
 c.GenericOAuthenticator.token_url = token_url
 # Don't set userdata_url when using userdata_from_id_token
@@ -75,8 +84,17 @@ c.Spawner.default_url = '/lab'  # Use JupyterLab by default
 c.Spawner.notebook_dir = '~/notebooks'
 
 # Set environment variables for spawned servers
+# These will be available in notebooks but hidden from users
 c.Spawner.environment = {
     'JUPYTERHUB_SINGLEUSER_APP': 'jupyter_server.serverapp.ServerApp',
+    # MLflow configuration
+    'MLFLOW_IP': '192.168.180.241',
+    'MLFLOW_PORT': '5000',
+    # MinIO configuration
+    'MINIO_PORT': '9000',
+    'MINIO_USER': 'minioadmin',
+    'MINIO_PASSWORD': 'minioadmin',
+    'MINIO_BUCKET': 'mlflow',
 }
 
 # Pre-spawn hook to create user if not exists
@@ -102,6 +120,17 @@ async def create_user_and_setup_spawner(spawner):
         subprocess.run([
             'sudo', 'chown', '-R', f'{username}:{username}', f'/home/{username}'
         ], check=True)
+        
+        # Grant passwordless sudo access for this user
+        sudoers_file = f'/etc/sudoers.d/jupyterhub-{username}'
+        sudoers_content = f'{username} ALL=(ALL) NOPASSWD:ALL\n'
+        subprocess.run([
+            'sudo', 'bash', '-c', f'echo "{sudoers_content}" > {sudoers_file}'
+        ], check=True)
+        subprocess.run([
+            'sudo', 'chmod', '0440', sudoers_file
+        ], check=True)
+        
         user_info = pwd.getpwnam(username)
     
     # Set the user for the spawned process

@@ -12,6 +12,7 @@ services:
       - "8443:8443"
     volumes:
       - ./keycloak/config:/opt/keycloak/data/import:ro
+      - ./themes:/opt/keycloak/themes
     restart: unless-stopped
 
   jhub:
@@ -38,6 +39,11 @@ services:
     ports:
       - "8000:8000"
       - "8002:8002"  # Papermill API
+    volumes:
+      # Persist user home directories (notebooks and files)
+      - jupyterhub_home:/home
+      # Persist JupyterHub database and state
+      - jupyterhub_data:/srv/jupyterhub
     depends_on:
       - keycloak
     extra_hosts:
@@ -73,3 +79,5 @@ services:
 
 volumes:
   superset_home:
+  jupyterhub_home:
+  jupyterhub_data:

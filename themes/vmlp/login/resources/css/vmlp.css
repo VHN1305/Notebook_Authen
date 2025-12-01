@@ -1,0 +1,290 @@
+:root {
+  --vmlp-primary: #e03;               /* #ee0033 */
+  --vmlp-primary-dark: #c0022a;
+  --vmlp-primary-soft: rgba(238, 0, 51, 0.18);
+  --vmlp-text: #222222;
+  --vmlp-muted: #6b7280;
+  --vmlp-border: #d1d5db;
+}
+
+/* ====== NỀN ĐẦY MÀN HÌNH VỚI ẢNH VIETTEL ====== */
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+/* Đặt background trực tiếp lên body (và body.login-pf) */
+body,
+body.login-pf {
+  background: url("../img/vt_bg.jpg") center 20% / cover no-repeat fixed !important;
+}
+
+/* Các wrapper bên trong trong suốt, full height */
+#kc-body,
+#kc-container,
+#kc-container-wrapper,
+#kc-page {
+  background: transparent !important;
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  min-height: 100vh;
+}
+
+/* Xoá pattern nền đen mặc định (body::before, login-pf-page::before...) */
+body::before,
+body::after,
+.login-pf-page::before,
+.login-pf-page::after,
+#kc-page::before,
+#kc-page::after {
+  content: none !important;
+  display: none !important;
+  background: none !important;
+}
+
+/* ====== XOÁ HẲN HEADER TRẮNG Ở TRÊN ====== */
+
+body.login-pf,
+.login-pf-page {
+  padding-top: 0 !important;
+  margin-top: 0 !important;
+}
+
+[role="banner"],
+#kc-header-wrapper,
+#kc-header,
+.pf-v5-c-page__header {
+  display: none !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  border: 0 !important;
+}
+
+/* Không cho các container thêm padding/margin lạ */
+.login-pf-page,
+.login-pf-page .card-pf {
+  background: transparent !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+}
+
+/* ====== XOÁ WRAP TRẮNG MẶC ĐỊNH ====== */
+
+#kc-content,
+#kc-content-wrapper {
+  background: transparent !important;
+  box-shadow: none !important;
+  border: 0 !important;
+  margin: 0;
+  padding: 0;
+}
+
+/* ====== CARD LOGIN – OVERLAY Ở GIỮA MÀN HÌNH ====== */
+
+/* Card chính */
+#kc-form-wrapper {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+
+  max-width: 420px;
+  width: 100%;
+  background-color: #ffffff;
+  border-radius: 16px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.35);
+  padding: 32px 38px 24px;
+  box-sizing: border-box;
+}
+
+/* Logo Viettel trên card */
+#kc-form-wrapper::before {
+  content: "";
+  display: block;
+  width: 130px;
+  height: 42px;
+  margin: 0 auto 24px;
+  background-image: url("../img/viettel-logo.png");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: contain;
+}
+
+/* ====== FORM LOGIN BÊN TRONG CARD ====== */
+
+#kc-form,
+#kc-form-login {
+  width: 100%;
+}
+
+#kc-form-login .form-group {
+  margin-bottom: 18px;
+}
+
+#kc-form-login label {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--vmlp-text);
+  margin-bottom: 4px;
+}
+
+/* Inputs */
+#kc-form-login input[type="text"],
+#kc-form-login input[type="password"],
+#kc-form-login input[type="email"] {
+  border-radius: 8px;
+  border: 1px solid var(--vmlp-border);
+  padding: 9px 12px;
+  font-size: 13px;
+  height: 40px;
+  box-sizing: border-box;
+}
+
+#kc-form-login input[type="text"]:focus,
+#kc-form-login input[type="password"]:focus,
+#kc-form-login input[type="email"]:focus {
+  border-color: var(--vmlp-primary);
+  box-shadow: 0 0 0 0.08rem var(--vmlp-primary-soft);
+}
+
+/* Remember me + Forgot password */
+#kc-form-options {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 2px 0 4px;
+}
+
+#kc-form-options .checkbox {
+  margin: 0;
+}
+
+#kc-form-options .checkbox label {
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--vmlp-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#kc-form-options a {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--vmlp-primary);
+}
+
+#kc-form-options a:hover {
+  color: var(--vmlp-primary-dark);
+  text-decoration: none;
+}
+
+/* Nút SIGN IN */
+#kc-login,
+#kc-form-login .btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  margin-top: 18px;
+  height: 42px;
+  border-radius: 999px;
+  border: 0;
+  background: var(--vmlp-primary);
+  color: #ffffff;
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  box-shadow: 0 12px 24px rgba(238, 0, 51, 0.45);
+}
+
+#kc-login:hover,
+#kc-form-login .btn-primary:hover {
+  background: var(--vmlp-primary-dark);
+  color: #ffffff;
+}
+
+/* Link dưới nút (nếu có) */
+#kc-registration,
+#kc-form-buttons {
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+#kc-registration {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+#kc-registration a,
+#kc-form-buttons a {
+  font-size: 12px;
+  color: var(--vmlp-primary);
+}
+
+#kc-registration a:hover,
+#kc-form-buttons a:hover {
+  color: var(--vmlp-primary-dark);
+}
+
+/* Ẩn social login nếu không dùng */
+#kc-social-providers {
+  display: none;
+}
+
+/* Link chung */
+a {
+  color: var(--vmlp-primary);
+}
+
+a:hover {
+  color: var(--vmlp-primary-dark);
+}
+
+/* ====== RESPONSIVE ====== */
+
+@media (max-width: 600px) {
+  #kc-form-wrapper {
+    max-width: 360px;
+    padding: 24px 24px 20px;
+  }
+}
+
+/* ===== Ẩn dòng "Sign in to your account" và đường kẻ dưới nó ===== */
+
+/* Tiêu đề Keycloak cũ */
+#kc-page-title {
+  display: none !important;
+}
+
+/* Một số class header/tiêu đề trong layout mới */
+.kc-login-title,
+.kc-login-header,
+.login-pf-page .login-pf-header,
+.login-pf-page .card-pf-title,
+.pf-v5-c-title {
+  display: none !important;
+  border: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Nếu nó dùng <hr> để kẻ vạch mờ bên dưới, ẩn luôn */
+.login-pf-page hr,
+#kc-page hr {
+  display: none !important;
+  margin: 0 !important;
+  border: 0 !important;
+}
+
+

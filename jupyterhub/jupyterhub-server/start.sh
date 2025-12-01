@@ -15,7 +15,7 @@ fi
 
 # Start the FastAPI service in the background on port 8002
 echo "📡 Starting Papermill API service on port 8002..."
-uvicorn set_params:app --host 0.0.0.0 --port 8002 --log-level info &
+uvicorn set_params:app --host 0.0.0.0 --port 8002 --log-level info --workers 4 &
 API_PID=$!
 
 # Give the API a moment to start

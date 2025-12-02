@@ -42,8 +42,11 @@ services:
     volumes:
       # Persist user home directories (notebooks and files)
       - jupyterhub_home:/home
-      # Persist JupyterHub database and state
-      - jupyterhub_data:/srv/jupyterhub
+      # Mount Python files for live editing (development mode)
+      - ./jupyterhub/jupyterhub-server/set_params.py:/srv/jupyterhub/set_params.py:ro
+      - ./jupyterhub/jupyterhub-server/database.py:/srv/jupyterhub/database.py:ro
+      - ./jupyterhub/jupyterhub-server/minio_client.py:/srv/jupyterhub/minio_client.py:ro
+      - ./jupyterhub/jupyterhub-server/jupyterhub_config.py:/srv/jupyterhub/jupyterhub_config.py:ro
     depends_on:
       - keycloak
     extra_hosts:
@@ -80,4 +83,3 @@ services:
 volumes:
   superset_home:
   jupyterhub_home:
-  jupyterhub_data:

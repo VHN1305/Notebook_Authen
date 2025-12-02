@@ -267,7 +267,7 @@ def root():
     """Root endpoint with API information"""
     return {
         "service": "JupyterHub Papermill API with Database Management",
-        "version": "2.1.0",
+        "version": "2.2.0",
         "kernel": {
             "default": "mlflow_kernel",
             "display_name": "Python 3 (MLflow 2.8.0)",
@@ -287,6 +287,10 @@ def root():
                 "/copy-notebook": "Copy notebook from DB to user directory",
                 "/upload-notebook": "Upload notebook file to user directory",
                 "/create-from-template": "Create notebook from MinIO template with parameters"
+            },
+            "notebook_transfer": {
+                "/download-notebook": "Download notebook from JupyterHub",
+                "/upload-notebook-to-minio": "Upload notebook from JupyterHub to MinIO"
             },
             "minio_templates": {
                 "/minio/upload-template": "Upload notebook to MinIO as template",
@@ -2150,4 +2154,207 @@ async def create_notebook_from_template(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create notebook from template: {str(e)}")
+
+
+@app.get("/download-notebook")
+async def download_notebook(
+    notebook_path: str,
+    username: Optional[str] = None
+):
+    """
+    Download a notebook file from JupyterHub
+    
+    Parameters:
+    - notebook_path: Absolute path to the notebook file (query parameter, required)
+    - username: Username for path validation (query parameter, optional)
+    
+    Behavior:
+    - Validates that the notebook file exists
+    - If username provided, ensures notebook is in user's home directory
+    - Returns the notebook file as a downloadable attachment
+    
+    Example request:
+    GET /download-notebook?notebook_path=/home/student1/notebooks/analysis.ipynb&username=student1
+    
+    Returns:
+    - File download with proper Content-Disposition header
+    - Filename set to the original notebook name
+    - Content-Type: application/x-ipynb+json
+    
+    Errors:
+    - 404: Notebook file not found
+    - 403: Access denied (notebook outside user's home directory)
+    - 400: Invalid file type (not .ipynb)
+    """
+    from fastapi.responses import FileResponse
+    
+    try:
+        # Validate path is absolute and exists
+        if not os.path.isabs(notebook_path):
+            raise HTTPException(status_code=400, detail="notebook_path must be an absolute path")
+        
+        if not os.path.exists(notebook_path):
+            raise HTTPException(status_code=404, detail=f"Notebook not found: {notebook_path}")
+        
+        if not os.path.isfile(notebook_path):
+            raise HTTPException(status_code=400, detail=f"Path is not a file: {notebook_path}")
+        
+        # Validate it's a notebook file
+        if not notebook_path.endswith('.ipynb'):
+            raise HTTPException(status_code=400, detail="File must be a .ipynb notebook")
+        
+        # If username provided, validate notebook is in user's directory
+        if username:
+            user_home = f"/home/{username}"
+            real_notebook_path = os.path.realpath(notebook_path)
+            real_user_home = os.path.realpath(user_home)
+            
+            if not real_notebook_path.startswith(real_user_home + os.sep):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Access denied: Notebook is not in user's home directory"
+                )
+        
+        # Get filename for download
+        filename = os.path.basename(notebook_path)
+        
+        # Return file as download
+        return FileResponse(
+            path=notebook_path,
+            media_type="application/x-ipynb+json",
+            filename=filename,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to download notebook: {str(e)}")
+
+
+@app.post("/upload-notebook-to-minio")
+async def upload_notebook_to_minio(
+    notebook_path: str,
+    minio_name: Optional[str] = None,
+    username: Optional[str] = None,
+    category: Optional[str] = None,
+    overwrite: bool = False
+):
+    """
+    Upload a notebook from JupyterHub to MinIO storage
+    
+    Parameters:
+    - notebook_path: Absolute path to the notebook file in JupyterHub (query parameter, required)
+    - minio_name: Name to save in MinIO (query parameter, optional, defaults to original filename)
+    - username: Username for path validation (query parameter, optional)
+    - overwrite: Whether to overwrite if file exists in MinIO (query parameter, default: false)
+    
+    Behavior:
+    - Validates that the notebook file exists in JupyterHub
+    - If username provided, ensures notebook is in user's home directory
+    - Reads the notebook file and uploads to MinIO
+    - Validates notebook is valid JSON before uploading
+    - Sets proper MinIO metadata
+    
+    Example request:
+    POST /upload-notebook-to-minio?notebook_path=/home/student1/notebooks/analysis.ipynb&minio_name=student1_analysis.ipynb&username=student1
+    
+    Returns:
+    - status: "success"
+    - notebook_path: Source path in JupyterHub
+    - minio_name: Name in MinIO storage
+    - size: File size in bytes
+    - bucket: MinIO bucket name
+    - username: Username (if provided)
+    - overwrite: Whether overwrite was enabled
+    - timestamp
+    
+    Errors:
+    - 404: Notebook file not found
+    - 403: Access denied (notebook outside user's home directory)
+    - 400: Invalid file type, file exists in MinIO, or invalid JSON
+    """
+    try:
+        # Validate path is absolute and exists
+        if not os.path.isabs(notebook_path):
+            raise HTTPException(status_code=400, detail="notebook_path must be an absolute path")
+        
+        if not os.path.exists(notebook_path):
+            raise HTTPException(status_code=404, detail=f"Notebook not found: {notebook_path}")
+        
+        if not os.path.isfile(notebook_path):
+            raise HTTPException(status_code=400, detail=f"Path is not a file: {notebook_path}")
+        
+        # Validate it's a notebook file
+        if not notebook_path.endswith('.ipynb'):
+            raise HTTPException(status_code=400, detail="File must be a .ipynb notebook")
+        
+        # If username provided, validate notebook is in user's directory
+        if username:
+            user_home = f"/home/{username}"
+            real_notebook_path = os.path.realpath(notebook_path)
+            real_user_home = os.path.realpath(user_home)
+            
+            if not real_notebook_path.startswith(real_user_home + os.sep):
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Access denied: Notebook is not in user's home directory"
+                )
+        
+        # Determine MinIO name
+        if not minio_name:
+            minio_name = os.path.basename(notebook_path)
+        
+        if not minio_name.endswith('.ipynb'):
+            minio_name += '.ipynb'
+        
+        if category:
+            minio_name = f"{category}/{minio_name}"
+        # Read and validate notebook content
+        with open(notebook_path, 'r') as f:
+            content = f.read()
+        
+        try:
+            notebook_json = json.loads(content)
+            # Basic validation
+            if 'cells' not in notebook_json:
+                raise ValueError("Invalid notebook: missing 'cells' field")
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid notebook: not valid JSON")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        
+        # Get MinIO client
+        minio_client = get_minio_client()
+        
+        # Check if file exists in MinIO
+        if not overwrite:
+            if minio_client.notebook_exists(minio_name):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Notebook '{minio_name}' already exists in MinIO. Use overwrite=true to replace."
+                )
+        
+        # Upload to MinIO using the file path directly
+        upload_result = minio_client.upload_notebook(notebook_path, minio_name)
+        
+        return {
+            "status": "success",
+            "message": "Notebook uploaded to MinIO successfully",
+            "notebook_path": notebook_path,
+            "minio_name": minio_name,
+            "size": upload_result.get("size", 0),
+            "bucket": minio_client.bucket_name,
+            "etag": upload_result.get("etag"),
+            "username": username,
+            "overwrite": overwrite,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to upload notebook to MinIO: {str(e)}")
 

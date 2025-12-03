@@ -2063,14 +2063,23 @@ async def create_notebook_from_template(
         if not new_name.endswith('.ipynb'):
             new_name += '.ipynb'
         
-        # Create target directory
-        target_dir = os.path.join(user_home, directory)
+        # Build target path - handle nested directories in new_name
+        target_path = os.path.join(user_home, directory, new_name)
+        
+        # Create all parent directories for the notebook file
+        target_dir = os.path.dirname(target_path)
         if not os.path.exists(target_dir):
             os.makedirs(target_dir, exist_ok=True)
+            # Set ownership for all created directories
             stat_info = os.stat(user_home)
-            os.chown(target_dir, stat_info.st_uid, stat_info.st_gid)
-        
-        target_path = os.path.join(target_dir, new_name)
+            # Walk up from target_dir and set ownership for new directories
+            current_dir = target_dir
+            while current_dir != user_home and current_dir.startswith(user_home):
+                try:
+                    os.chown(current_dir, stat_info.st_uid, stat_info.st_gid)
+                except Exception:
+                    pass
+                current_dir = os.path.dirname(current_dir)
         
         if os.path.exists(target_path):
             raise HTTPException(

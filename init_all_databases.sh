@@ -8,9 +8,8 @@ echo "============================================================"
 echo "🚀 Notebook Authentication System - Database Setup"
 echo "============================================================"
 echo ""
-
 # Configuration
-POSTGRES_HOST="${POSTGRES_HOST:-localhost}"
+POSTGRES_HOST="${POSTGRES_HOST:-34.59.142.41}"
 POSTGRES_USER="${POSTGRES_USER:-mlflow}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-mlflow}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
@@ -61,11 +60,11 @@ else
 fi
 echo ""
 
-# Initialize Superset data tables
-echo "📊 Initializing Superset data tables..."
-cd "$SCRIPT_DIR"
-psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -p "$POSTGRES_PORT" -d "$POSTGRES_DB" -f ./superset/init_superset_db.sql > /dev/null
-echo "✅ Superset data tables initialized!"
+# Note: Superset metadata tables are automatically created by Superset
+# in the 'superset' schema on first startup
+echo "📊 Superset configuration..."
+echo "   ℹ️  Superset will create its metadata tables in 'superset' schema on first startup"
+echo "   ℹ️  Connection: mlflow_db with search_path=superset"
 echo ""
 
 # Verify setup
@@ -74,7 +73,7 @@ echo ""
 
 # Check schemas
 echo "Schemas:"
-psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -p "$POSTGRES_PORT" -d "$POSTGRES_DB" -c "\dn" | grep -E "Name|public|---"
+psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -p "$POSTGRES_PORT" -d "$POSTGRES_DB" -c "\dn" | grep -E "Name|public|superset|---"
 echo ""
 
 # Check notebook tables
@@ -88,14 +87,13 @@ else
 fi
 echo ""
 
-# Check Superset data tables
-echo "Superset data tables:"
-SUPERSET_TABLES=$(psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -p "$POSTGRES_PORT" -d "$POSTGRES_DB" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('superset_datasets', 'superset_metrics', 'user_activity');")
-if [ "$SUPERSET_TABLES" -ge 3 ]; then
-    echo "  ✅ Found $SUPERSET_TABLES Superset data tables"
-    psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -p "$POSTGRES_PORT" -d "$POSTGRES_DB" -c "SELECT '  ✓ ' || tablename FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('superset_datasets', 'superset_metrics', 'user_activity');" -t
+# Check MLflow tables
+echo "MLflow tables:"
+MLFLOW_TABLES=$(psql -h "$POSTGRES_HOST" -U "$POSTGRES_USER" -p "$POSTGRES_PORT" -d "$POSTGRES_DB" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('experiments', 'runs', 'metrics', 'datasets', 'params', 'tags');")
+if [ "$MLFLOW_TABLES" -ge 6 ]; then
+    echo "  ✅ Found $MLFLOW_TABLES MLflow core tables"
 else
-    echo "  ⚠️  Warning: Only found $SUPERSET_TABLES Superset data tables (expected 3+)"
+    echo "  ⚠️  Warning: Only found $MLFLOW_TABLES MLflow tables (expected 6+)"
 fi
 echo ""
 
@@ -114,5 +112,7 @@ echo "   2. Access JupyterHub: http://localhost:8000"
 echo "   3. Access Superset: http://localhost:8088 (admin/admin)"
 echo "   4. Access Keycloak: http://localhost:8080 (admin/secret)"
 echo ""
-echo "💡 Tip: Superset will create its metadata tables automatically on first start."
+echo "💡 Database structure:"
+echo "   - mlflow_db/public: MLflow & JupyterHub data tables"
+echo "   - mlflow_db/superset: Superset metadata (auto-created on first start)"
 echo ""

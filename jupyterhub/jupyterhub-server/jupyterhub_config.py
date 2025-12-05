@@ -85,16 +85,23 @@ c.Spawner.notebook_dir = '~/notebooks'
 
 # Set environment variables for spawned servers
 # These will be available in notebooks but hidden from users
+MLFLOW_IP = os.environ.get('MLFLOW_IP', 'localhost')
+MLFLOW_PORT = os.environ.get('MLFLOW_PORT', '5000')
+MINIO_PORT = os.environ.get('MINIO_PORT', '9000')
+MINIO_USER = os.environ.get('MINIO_USER', 'minioadmin')
+MINIO_PASSWORD = os.environ.get('MINIO_PASSWORD', 'minioadmin')
+MINIO_BUCKET = os.environ.get('MINIO_BUCKET', 'mlflow')
+
 c.Spawner.environment = {
     'JUPYTERHUB_SINGLEUSER_APP': 'jupyter_server.serverapp.ServerApp',
     # MLflow configuration
-    'MLFLOW_IP': '192.168.180.241',
-    'MLFLOW_PORT': '5000',
+    'MLFLOW_IP': MLFLOW_IP,
+    'MLFLOW_PORT': MLFLOW_PORT,
     # MinIO configuration
-    'MINIO_PORT': '9000',
-    'MINIO_USER': 'minioadmin',
-    'MINIO_PASSWORD': 'minioadmin',
-    'MINIO_BUCKET': 'mlflow',
+    'MINIO_PORT': MINIO_PORT,
+    'MINIO_USER': MINIO_USER,
+    'MINIO_PASSWORD': MINIO_PASSWORD,
+    'MINIO_BUCKET': MINIO_BUCKET,
 }
 
 # Pre-spawn hook to create user if not exists

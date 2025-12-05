@@ -9,7 +9,7 @@ import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
 # Database configuration
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
+POSTGRES_HOST = os.getenv("POSTGRES_HOST_IP", "34.59.142.41")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "mlflow")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "mlflow")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")

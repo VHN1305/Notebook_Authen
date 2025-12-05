@@ -3,10 +3,10 @@ services:
     image: quay.io/keycloak/keycloak:23.0
     command: start-dev --import-realm
     environment:
-      - KEYCLOAK_ADMIN=admin
-      - KEYCLOAK_ADMIN_PASSWORD=secret
-      - KC_HTTP_PORT=8080
-      - KC_HTTPS_PORT=8443
+      - KEYCLOAK_ADMIN=${KEYCLOAK_ADMIN_USER:-admin}
+      - KEYCLOAK_ADMIN_PASSWORD=${KEYCLOAK_ADMIN_PASSWORD:-secret}
+      - KC_HTTP_PORT=${KC_HTTP_PORT:-8080}
+      - KC_HTTPS_PORT=${KC_HTTPS_PORT:-8443}
     ports:
       - "8080:8080"
       - "8443:8443"
@@ -21,21 +21,29 @@ services:
     environment:
       - OAUTH_TLS_VERIFY=0
       # Browser-facing URL (must be accessible from user's browser)
-      - OAUTH2_AUTHORIZE_URL=http://${HOST_IP:-localhost}:8080/realms/jhub/protocol/openid-connect/auth
+      - OAUTH2_AUTHORIZE_URL=http://${KEYCLOAK_HOST_IP:-localhost}:8080/realms/jhub/protocol/openid-connect/auth
       # Server-to-server URLs (internal Docker network)
       - OAUTH2_TOKEN_URL=http://keycloak:8080/realms/jhub/protocol/openid-connect/token
       - OAUTH2_USERDATA_URL=http://keycloak:8080/realms/jhub/protocol/openid-connect/userinfo
       - OAUTH_CLIENT_ID=jhub-1
       - OAUTH_CLIENT_SECRET=2q4aDQuw0MckAbFBlhlo74eDsyZ8b9hJ
-      - OAUTH_CALLBACK_URL=http://${HOST_IP:-localhost}:8000/hub/oauth_callback
+      - OAUTH_CALLBACK_URL=http://${KEYCLOAK_HOST_IP:-localhost}:8000/hub/oauth_callback
       - JUPYTERHUB_CRYPT_KEY=ae49a5321f7841c0eb107ac20d298d99ee12df59fdd8732c86a4116ebbe796b7
       # Database configuration for notebook management
-      - DATABASE_URL=postgresql://mlflow:mlflow@host.docker.internal:5432/mlflow_db
-      - POSTGRES_HOST=host.docker.internal
-      - POSTGRES_USER=mlflow
-      - POSTGRES_PASSWORD=mlflow
-      - POSTGRES_DB=mlflow_db
-      - POSTGRES_PORT=5432
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST_IP}:${POSTGRES_PORT}/${POSTGRES_DB}
+      - POSTGRES_HOST=${POSTGRES_HOST_IP}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - MLFLOW_IP=${MLFLOW_IP}
+      - MLFLOW_PORT=${MLFLOW_PORT}
+      - MINIO_IP=${MINIO_HOST_IP:-minio}
+      - MINIO_PORT=${MINIO_PORT:-9000}
+      - MINIO_USER=${MINIO_USER:-minioadmin}
+      - MINIO_PASSWORD=${MINIO_PASSWORD:-minioadmin}
+      - MINIO_BUCKET=${MINIO_BUCKET:-mlflow}
+
     ports:
       - "8000:8000"
       - "8002:8002"  # Papermill API
@@ -58,11 +66,16 @@ services:
     hostname: superset
     environment:
       - SUPERSET_SECRET_KEY=thisISaSECRET_superset_1234567890
-      # Superset metadata database (separate from data sources)
-      # - SQLALCHEMY_DATABASE_URI=postgresql://mlflow:mlflow@host.docker.internal:5432/superset_db
-      - SQLALCHEMY_DATABASE_URI=postgresql://mlflow:mlflow@host.docker.internal:5432/mlflow_db
-      # Data source database
-      - DATA_DATABASE_URI=postgresql://mlflow:mlflow@host.docker.internal:5432/mlflow_db
+      # Database configuration
+      - POSTGRES_HOST_IP=${POSTGRES_HOST_IP}
+      - POSTGRES_PORT=${POSTGRES_PORT}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      # Superset metadata in superset schema of mlflow_db
+      - SQLALCHEMY_DATABASE_URI=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST_IP}:${POSTGRES_PORT}/${POSTGRES_DB}?options=-csearch_path%3Dsuperset
+      # Data source database (public schema)
+      - DATA_DATABASE_URI=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@${POSTGRES_HOST_IP}:${POSTGRES_PORT}/${POSTGRES_DB}
       # Keycloak OAuth configuration
       - KEYCLOAK_BASE_URL=http://keycloak:8080
       - KEYCLOAK_PUBLIC_URL=http://${HOST_IP:-localhost}:8080

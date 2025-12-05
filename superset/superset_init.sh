@@ -7,7 +7,10 @@ echo "Starting Superset initialization..."
 echo "Waiting for database..."
 TIMEOUT=60
 ELAPSED=0
-until nc -z host.docker.internal 5432 2>/dev/null || [ $ELAPSED -eq $TIMEOUT ]; do
+DB_HOST="${POSTGRES_HOST_IP:-host.docker.internal}"
+DB_PORT="${POSTGRES_PORT:-5432}"
+echo "Connecting to database at $DB_HOST:$DB_PORT"
+until nc -z "$DB_HOST" "$DB_PORT" 2>/dev/null || [ $ELAPSED -eq $TIMEOUT ]; do
   sleep 2
   ELAPSED=$((ELAPSED + 2))
   echo "Waiting for database... ($ELAPSED/$TIMEOUT seconds)"

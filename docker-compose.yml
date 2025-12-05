@@ -30,11 +30,11 @@ services:
       - OAUTH_CALLBACK_URL=http://${HOST_IP:-localhost}:8000/hub/oauth_callback
       - JUPYTERHUB_CRYPT_KEY=ae49a5321f7841c0eb107ac20d298d99ee12df59fdd8732c86a4116ebbe796b7
       # Database configuration for notebook management
-      - DATABASE_URL=postgresql://mlflow:mlflow@host.docker.internal:5432/notebook_manager
+      - DATABASE_URL=postgresql://mlflow:mlflow@host.docker.internal:5432/mlflow_db
       - POSTGRES_HOST=host.docker.internal
       - POSTGRES_USER=mlflow
       - POSTGRES_PASSWORD=mlflow
-      - POSTGRES_DB=notebook_manager
+      - POSTGRES_DB=mlflow_db
       - POSTGRES_PORT=5432
     ports:
       - "8000:8000"
@@ -59,9 +59,10 @@ services:
     environment:
       - SUPERSET_SECRET_KEY=thisISaSECRET_superset_1234567890
       # Superset metadata database (separate from data sources)
-      - SQLALCHEMY_DATABASE_URI=postgresql://mlflow:mlflow@host.docker.internal:5432/superset_db
+      # - SQLALCHEMY_DATABASE_URI=postgresql://mlflow:mlflow@host.docker.internal:5432/superset_db
+      - SQLALCHEMY_DATABASE_URI=postgresql://mlflow:mlflow@host.docker.internal:5432/mlflow_db
       # Data source database
-      - DATA_DATABASE_URI=postgresql://mlflow:mlflow@host.docker.internal:5432/notebook_manager
+      - DATA_DATABASE_URI=postgresql://mlflow:mlflow@host.docker.internal:5432/mlflow_db
       # Keycloak OAuth configuration
       - KEYCLOAK_BASE_URL=http://keycloak:8080
       - KEYCLOAK_PUBLIC_URL=http://${HOST_IP:-localhost}:8080

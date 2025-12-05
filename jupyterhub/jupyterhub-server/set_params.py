@@ -497,7 +497,7 @@ async def execute_notebook(req: NotebookRequest, background_tasks: BackgroundTas
         db.refresh(execution)
         
         # Get database URL from environment
-        database_url = os.environ.get('DATABASE_URL', 'postgresql://mlflow:mlflow@host.docker.internal:5432/notebook_manager')
+        database_url = os.environ.get('DATABASE_URL', 'postgresql://mlflow:mlflow@host.docker.internal:5432/mlflow_db')
         
         # Start background execution in a separate thread
         thread = threading.Thread(
@@ -627,7 +627,7 @@ async def execute_user_notebook(req: NotebookExecuteRequest, background_tasks: B
         db.refresh(execution)
         
         # Get database URL from environment
-        database_url = os.environ.get('DATABASE_URL', 'postgresql://mlflow:mlflow@host.docker.internal:5432/notebook_manager')
+        database_url = os.environ.get('DATABASE_URL', 'postgresql://mlflow:mlflow@host.docker.internal:5432/mlflow_db')
         
         # Define a wrapper function for in-place execution
         def execute_inplace_background(execution_id: int, params: dict, input_path: str, tmp_path: str, 
@@ -819,6 +819,11 @@ async def execute_notebook_sync(req: NotebookExecuteRequest, db: Session = Depen
         db.add(execution)
         db.commit()
         db.refresh(execution)
+        execution_id = execution.id
+        
+        # IMPORTANT: Close the database session BEFORE long-running execution
+        # This prevents connection timeout during notebook execution
+        db.close()
         
         try:
             # Execute notebook synchronously with MLflow kernel
@@ -837,15 +842,26 @@ async def execute_notebook_sync(req: NotebookExecuteRequest, db: Session = Depen
             # Replace original file atomically
             os.replace(tmp_path, input_path)
             
-            # Update status to success
-            completed_at = datetime.utcnow()
-            execution_time = int((completed_at - started_at).total_seconds())
-            
-            execution.status = "success"
-            execution.output_path = input_path  # Update to final path
-            execution.completed_at = completed_at
-            execution.execution_time_seconds = execution_time
-            db.commit()
+            # Create NEW database session for updating after execution
+            from database import SessionLocal
+            db_new = SessionLocal()
+            try:
+                # Update status to success
+                completed_at = datetime.utcnow()
+                execution_time = int((completed_at - started_at).total_seconds())
+                
+                execution_record = db_new.query(NotebookExecution).filter(
+                    NotebookExecution.id == execution_id
+                ).first()
+                
+                if execution_record:
+                    execution_record.status = "success"
+                    execution_record.output_path = input_path
+                    execution_record.completed_at = completed_at
+                    execution_record.execution_time_seconds = execution_time
+                    db_new.commit()
+            finally:
+                db_new.close()
             
             # Generate URLs
             relative_path = input_path.replace(f"/home/{username}/", "")
@@ -853,7 +869,7 @@ async def execute_notebook_sync(req: NotebookExecuteRequest, db: Session = Depen
 
             return {
                 "status": "success",
-                "execution_id": execution.id,
+                "execution_id": execution_id,
                 "input_notebook": input_path,
                 "notebook_url": notebook_url,
                 "execution_time_seconds": execution_time,
@@ -901,11 +917,22 @@ async def execute_notebook_sync(req: NotebookExecuteRequest, db: Session = Depen
             completed_at = datetime.utcnow()
             execution_time = int((completed_at - started_at).total_seconds())
             
-            execution.status = "failed"
-            execution.error_message = str(e)
-            execution.completed_at = completed_at
-            execution.execution_time_seconds = execution_time
-            db.commit()
+            # Create NEW database session for error update
+            from database import SessionLocal
+            db_new = SessionLocal()
+            try:
+                execution_record = db_new.query(NotebookExecution).filter(
+                    NotebookExecution.id == execution_id
+                ).first()
+                
+                if execution_record:
+                    execution_record.status = "failed"
+                    execution_record.error_message = str(e)
+                    execution_record.completed_at = completed_at
+                    execution_record.execution_time_seconds = execution_time
+                    db_new.commit()
+            finally:
+                db_new.close()
             
             # Generate URLs
             relative_path = input_path.replace(f"/home/{username}/", "")
@@ -913,7 +940,7 @@ async def execute_notebook_sync(req: NotebookExecuteRequest, db: Session = Depen
             
             return {
                 "status": "failed",
-                "execution_id": execution.id,
+                "execution_id": execution_id,
                 "input_notebook": input_path,
                 "notebook_url": notebook_url,
                 "execution_time_seconds": execution_time,
@@ -999,655 +1026,6 @@ def list_user_notebooks(username: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ==================== Database CRUD Endpoints ====================
-
-# ===== Notebook Management =====
-
-@app.post("/db/notebooks", response_model=NotebookResponse, status_code=201)
-def create_notebook(notebook: NotebookCreate, db: Session = Depends(get_db)):
-    """
-    Register a new notebook in the database
-    
-    Parameters:
-    - name: Notebook display name (required, max 255 chars)
-    - description: Optional description
-    - file_path: Absolute path to notebook file (required, max 512 chars)
-    - username: Owner username (required, max 100 chars)
-    - tags: Array of string tags (optional, default: [])
-    - metadata: Additional metadata as JSON object (optional, default: {})
-    
-    Example request body:
-    {
-        "name": "Sales Analysis Q4",
-        "description": "Quarterly sales analysis notebook",
-        "file_path": "/home/analyst/notebooks/sales_q4.ipynb",
-        "username": "analyst",
-        "tags": ["sales", "quarterly", "2025"],
-        "metadata": {"department": "finance", "priority": "high"}
-    }
-    
-    Returns:
-    - Notebook object with generated ID and timestamps
-    
-    Errors:
-    - 400: Notebook with same name and username already exists
-    - 404: File path does not exist
-    """
-    # Check if notebook with same name and username exists
-    existing = db.query(Notebook).filter(
-        Notebook.name == notebook.name,
-        Notebook.username == notebook.username
-    ).first()
-    
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Notebook '{notebook.name}' already exists for user '{notebook.username}'"
-        )
-    
-    # Check if file exists
-    if not os.path.exists(notebook.file_path):
-        raise HTTPException(
-            status_code=404,
-            detail=f"Notebook file not found: {notebook.file_path}"
-        )
-    
-    # Map metadata to notebook_metadata for database
-    notebook_data = notebook.model_dump()
-    notebook_data['notebook_metadata'] = notebook_data.pop('metadata', {})
-    
-    db_notebook = Notebook(**notebook_data)
-    db.add(db_notebook)
-    db.commit()
-    db.refresh(db_notebook)
-    
-    return db_notebook
-
-
-@app.get("/db/notebooks", response_model=List[NotebookResponse])
-def list_notebooks(
-    skip: int = 0,
-    limit: int = 100,
-    username: Optional[str] = None,
-    tag: Optional[str] = None,
-    db: Session = Depends(get_db)
-):
-    """
-    List all registered notebooks with optional filtering
-    
-    Query Parameters:
-    - skip: Number of records to skip for pagination (default: 0)
-    - limit: Maximum number of records to return (default: 100)
-    - username: Filter by username (optional)
-    - tag: Filter by tag (optional, matches if tag is in notebook's tags array)
-    
-    Example requests:
-    GET /db/notebooks
-    GET /db/notebooks?username=student1
-    GET /db/notebooks?tag=assignment&limit=50
-    GET /db/notebooks?skip=20&limit=10
-    
-    Returns:
-    - Array of notebook objects with all fields
-    """
-    query = db.query(Notebook)
-    
-    if username:
-        query = query.filter(Notebook.username == username)
-    
-    if tag:
-        # Filter notebooks that contain the specified tag
-        query = query.filter(Notebook.tags.contains([tag]))
-    
-    notebooks = query.offset(skip).limit(limit).all()
-    return notebooks
-
-
-@app.get("/db/notebooks/{notebook_id}", response_model=NotebookWithParameters)
-def get_notebook(notebook_id: int, db: Session = Depends(get_db)):
-    """
-    Get a specific notebook with all its parameters
-    
-    Parameters:
-    - notebook_id: Notebook ID (path parameter)
-    
-    Example request:
-    GET /db/notebooks/5
-    
-    Returns:
-    - Notebook object with embedded parameters array
-    - Each parameter includes: id, name, type, default_value, description, required, validation_rules
-    
-    Errors:
-    - 404: Notebook not found
-    """
-    notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
-    
-    if not notebook:
-        raise HTTPException(status_code=404, detail="Notebook not found")
-    
-    return notebook
-
-
-@app.get("/db/notebooks/user/{username}", response_model=List[NotebookResponse])
-def get_notebooks_by_user(username: str, db: Session = Depends(get_db)):
-    """
-    Get all notebooks registered for a specific user
-    
-    Parameters:
-    - username: JupyterLab username (path parameter)
-    
-    Example request:
-    GET /db/notebooks/user/student1
-    
-    Returns:
-    - Array of all notebooks owned by the specified user
-    """
-    notebooks = db.query(Notebook).filter(Notebook.username == username).all()
-    return notebooks
-
-
-@app.put("/db/notebooks/{notebook_id}", response_model=NotebookResponse)
-def update_notebook(notebook_id: int, notebook_update: NotebookUpdate, db: Session = Depends(get_db)):
-    """
-    Update an existing notebook's information
-    
-    Parameters:
-    - notebook_id: Notebook ID (path parameter)
-    - name: New display name (optional, max 255 chars)
-    - description: New description (optional)
-    - file_path: New file path (optional, max 512 chars)
-    - tags: New tags array (optional)
-    - metadata: New metadata object (optional)
-    
-    Example request:
-    PUT /db/notebooks/5
-    {
-        "name": "Updated Sales Analysis",
-        "tags": ["sales", "2025", "updated"],
-        "description": "Updated quarterly analysis"
-    }
-    
-    Note: Only provided fields will be updated. Omitted fields remain unchanged.
-    
-    Returns:
-    - Updated notebook object with new updated_at timestamp
-    
-    Errors:
-    - 404: Notebook not found or file_path does not exist
-    """
-    db_notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
-    
-    if not db_notebook:
-        raise HTTPException(status_code=404, detail="Notebook not found")
-    
-    # Update only provided fields
-    update_data = notebook_update.model_dump(exclude_unset=True)
-    
-    # Map metadata to notebook_metadata if present
-    if 'metadata' in update_data:
-        update_data['notebook_metadata'] = update_data.pop('metadata')
-    
-    # Check if file path exists if being updated
-    if "file_path" in update_data:
-        if not os.path.exists(update_data["file_path"]):
-            raise HTTPException(
-                status_code=404,
-                detail=f"Notebook file not found: {update_data['file_path']}"
-            )
-    
-    for key, value in update_data.items():
-        setattr(db_notebook, key, value)
-    
-    db_notebook.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(db_notebook)
-    
-    return db_notebook
-
-
-@app.delete("/db/notebooks/{notebook_id}", status_code=204)
-def delete_notebook(notebook_id: int, db: Session = Depends(get_db)):
-    """
-    Delete a notebook from the database
-    
-    Parameters:
-    - notebook_id: Notebook ID (path parameter)
-    
-    Example request:
-    DELETE /db/notebooks/5
-    
-    Behavior:
-    - Deletes the notebook record from database
-    - Automatically deletes all associated parameters (cascade delete)
-    - Does NOT delete the actual notebook file from filesystem
-    
-    Returns:
-    - 204 No Content on success
-    
-    Errors:
-    - 404: Notebook not found
-    """
-    db_notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
-    
-    if not db_notebook:
-        raise HTTPException(status_code=404, detail="Notebook not found")
-    
-    db.delete(db_notebook)
-    db.commit()
-    
-    return None
-
-
-# ===== Parameter Management =====
-
-@app.post("/db/parameters", response_model=ParameterResponse, status_code=201)
-def create_parameter(parameter: ParameterCreate, db: Session = Depends(get_db)):
-    """
-    Create a new parameter definition for a notebook
-    
-    Parameters:
-    - notebook_id: ID of the notebook this parameter belongs to (required)
-    - param_name: Parameter name (required, max 100 chars)
-    - param_type: Data type - one of: "string", "integer", "float", "boolean", "json", "list" (required)
-    - default_value: Default value for this parameter (optional)
-    - description: Parameter description (optional)
-    - required: Whether this parameter is required (default: false)
-    - validation_rules: JSON object with validation rules (optional)
-    
-    Example request body:
-    {
-        "notebook_id": 5,
-        "param_name": "threshold",
-        "param_type": "float",
-        "default_value": 0.95,
-        "description": "Confidence threshold for predictions",
-        "required": true,
-        "validation_rules": {"min": 0.0, "max": 1.0}
-    }
-    
-    Returns:
-    - Parameter object with generated ID and timestamps
-    
-    Errors:
-    - 404: Notebook not found
-    - 400: Parameter with same name already exists for this notebook
-    """
-    # Check if notebook exists
-    notebook = db.query(Notebook).filter(Notebook.id == parameter.notebook_id).first()
-    if not notebook:
-        raise HTTPException(status_code=404, detail="Notebook not found")
-    
-    # Check if parameter with same name exists for this notebook
-    existing = db.query(NotebookParameter).filter(
-        NotebookParameter.notebook_id == parameter.notebook_id,
-        NotebookParameter.param_name == parameter.param_name
-    ).first()
-    
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Parameter '{parameter.param_name}' already exists for this notebook"
-        )
-    
-    db_param = NotebookParameter(
-        notebook_id=parameter.notebook_id,
-        param_name=parameter.param_name,
-        param_type=parameter.param_type,
-        default_value=parameter.default_value,
-        description=parameter.description,
-        required=1 if parameter.required else 0,
-        validation_rules=parameter.validation_rules
-    )
-    
-    db.add(db_param)
-    db.commit()
-    db.refresh(db_param)
-    
-    # Convert required back to boolean for response
-    response_param = ParameterResponse.model_validate(db_param)
-    response_param.required = bool(db_param.required)
-    
-    return response_param
-
-
-@app.get("/db/parameters/notebook/{notebook_id}", response_model=List[ParameterResponse])
-def get_notebook_parameters(notebook_id: int, db: Session = Depends(get_db)):
-    """
-    Get all parameter definitions for a specific notebook
-    
-    Parameters:
-    - notebook_id: Notebook ID (path parameter)
-    
-    Example request:
-    GET /db/parameters/notebook/5
-    
-    Returns:
-    - Array of parameter objects for the notebook
-    - Each parameter includes type, default value, validation rules, etc.
-    
-    Errors:
-    - 404: Notebook not found
-    """
-    # Check if notebook exists
-    notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
-    if not notebook:
-        raise HTTPException(status_code=404, detail="Notebook not found")
-    
-    parameters = db.query(NotebookParameter).filter(
-        NotebookParameter.notebook_id == notebook_id
-    ).all()
-    
-    # Convert required field to boolean
-    result = []
-    for param in parameters:
-        param_dict = ParameterResponse.model_validate(param)
-        param_dict.required = bool(param.required)
-        result.append(param_dict)
-    
-    return result
-
-
-@app.get("/db/parameters/{param_id}", response_model=ParameterResponse)
-def get_parameter(param_id: int, db: Session = Depends(get_db)):
-    """
-    Get a specific parameter definition by ID
-    
-    Parameters:
-    - param_id: Parameter ID (path parameter)
-    
-    Example request:
-    GET /db/parameters/15
-    
-    Returns:
-    - Parameter object with all fields
-    
-    Errors:
-    - 404: Parameter not found
-    """
-    parameter = db.query(NotebookParameter).filter(NotebookParameter.id == param_id).first()
-    
-    if not parameter:
-        raise HTTPException(status_code=404, detail="Parameter not found")
-    
-    response_param = ParameterResponse.model_validate(parameter)
-    response_param.required = bool(parameter.required)
-    
-    return response_param
-
-
-@app.put("/db/parameters/{param_id}", response_model=ParameterResponse)
-def update_parameter(param_id: int, parameter_update: ParameterUpdate, db: Session = Depends(get_db)):
-    """
-    Update an existing parameter definition
-    
-    Parameters:
-    - param_id: Parameter ID (path parameter)
-    - param_name: New parameter name (optional, max 100 chars)
-    - param_type: New data type (optional, must be valid type)
-    - default_value: New default value (optional)
-    - description: New description (optional)
-    - required: New required flag (optional)
-    - validation_rules: New validation rules (optional)
-    
-    Example request:
-    PUT /db/parameters/15
-    {
-        "default_value": 0.90,
-        "description": "Updated: Lower threshold for recall",
-        "validation_rules": {"min": 0.5, "max": 1.0}
-    }
-    
-    Note: Only provided fields will be updated.
-    
-    Returns:
-    - Updated parameter object with new updated_at timestamp
-    
-    Errors:
-    - 404: Parameter not found
-    """
-    db_param = db.query(NotebookParameter).filter(NotebookParameter.id == param_id).first()
-    
-    if not db_param:
-        raise HTTPException(status_code=404, detail="Parameter not found")
-    
-    # Update only provided fields
-    update_data = parameter_update.model_dump(exclude_unset=True)
-    
-    # Convert required boolean to integer if present
-    if "required" in update_data:
-        update_data["required"] = 1 if update_data["required"] else 0
-    
-    for key, value in update_data.items():
-        setattr(db_param, key, value)
-    
-    db_param.updated_at = datetime.utcnow()
-    db.commit()
-    db.refresh(db_param)
-    
-    response_param = ParameterResponse.model_validate(db_param)
-    response_param.required = bool(db_param.required)
-    
-    return response_param
-
-
-@app.delete("/db/parameters/{param_id}", status_code=204)
-def delete_parameter(param_id: int, db: Session = Depends(get_db)):
-    """
-    Delete a parameter definition
-    
-    Parameters:
-    - param_id: Parameter ID (path parameter)
-    
-    Example request:
-    DELETE /db/parameters/15
-    
-    Returns:
-    - 204 No Content on success
-    
-    Errors:
-    - 404: Parameter not found
-    """
-    db_param = db.query(NotebookParameter).filter(NotebookParameter.id == param_id).first()
-    
-    if not db_param:
-        raise HTTPException(status_code=404, detail="Parameter not found")
-    
-    db.delete(db_param)
-    db.commit()
-    
-    return None
-
-
-@app.post("/db/parameters/bulk/{notebook_id}", response_model=List[ParameterResponse], status_code=201)
-def create_bulk_parameters(
-    notebook_id: int,
-    parameters: List[ParameterCreate],
-    db: Session = Depends(get_db)
-):
-    """
-    Create multiple parameter definitions for a notebook in a single request
-    
-    Parameters:
-    - notebook_id: Notebook ID (path parameter)
-    - parameters: Array of parameter objects (request body)
-    
-    Example request:
-    POST /db/parameters/bulk/5
-    [
-        {
-            "notebook_id": 5,
-            "param_name": "threshold",
-            "param_type": "float",
-            "default_value": 0.95,
-            "required": true
-        },
-        {
-            "notebook_id": 5,
-            "param_name": "max_iterations",
-            "param_type": "integer",
-            "default_value": 1000,
-            "required": false
-        }
-    ]
-    
-    Note: All parameters must have notebook_id matching the path parameter.
-    
-    Returns:
-    - Array of created parameter objects
-    
-    Errors:
-    - 404: Notebook not found
-    - 400: notebook_id mismatch or duplicate parameter names
-    """
-    # Check if notebook exists
-    notebook = db.query(Notebook).filter(Notebook.id == notebook_id).first()
-    if not notebook:
-        raise HTTPException(status_code=404, detail="Notebook not found")
-    
-    created_params = []
-    
-    for param in parameters:
-        # Ensure notebook_id matches
-        if param.notebook_id != notebook_id:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Parameter notebook_id must match the URL notebook_id"
-            )
-        
-        # Check for duplicates
-        existing = db.query(NotebookParameter).filter(
-            NotebookParameter.notebook_id == notebook_id,
-            NotebookParameter.param_name == param.param_name
-        ).first()
-        
-        if existing:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Parameter '{param.param_name}' already exists for this notebook"
-            )
-        
-        db_param = NotebookParameter(
-            notebook_id=param.notebook_id,
-            param_name=param.param_name,
-            param_type=param.param_type,
-            default_value=param.default_value,
-            description=param.description,
-            required=1 if param.required else 0,
-            validation_rules=param.validation_rules
-        )
-        
-        db.add(db_param)
-        created_params.append(db_param)
-    
-    db.commit()
-    
-    # Refresh and convert to response
-    result = []
-    for param in created_params:
-        db.refresh(param)
-        param_response = ParameterResponse.model_validate(param)
-        param_response.required = bool(param.required)
-        result.append(param_response)
-    
-    return result
-
-
-# ===== Execution History =====
-
-@app.get("/db/executions", response_model=List[ExecutionHistoryResponse])
-def get_execution_history(
-    skip: int = 0,
-    limit: int = 100,
-    username: Optional[str] = None,
-    status: Optional[str] = None,
-    db: Session = Depends(get_db)
-):
-    """
-    Get notebook execution history with optional filtering
-    
-    Query Parameters:
-    - skip: Number of records to skip for pagination (default: 0)
-    - limit: Maximum number of records to return (default: 100)
-    - username: Filter by username (optional)
-    - status: Filter by status - "success", "failed", "running" (optional)
-    
-    Example requests:
-    GET /db/executions
-    GET /db/executions?username=student1&status=success
-    GET /db/executions?limit=50&skip=100
-    
-    Returns:
-    - Array of execution records ordered by started_at (newest first)
-    - Each record includes: notebook_id, username, paths, parameters, status, timing
-    """
-    query = db.query(NotebookExecution)
-    
-    if username:
-        query = query.filter(NotebookExecution.username == username)
-    
-    if status:
-        query = query.filter(NotebookExecution.status == status)
-    
-    executions = query.order_by(NotebookExecution.started_at.desc()).offset(skip).limit(limit).all()
-    return executions
-
-
-@app.get("/db/executions/notebook/{notebook_id}", response_model=List[ExecutionHistoryResponse])
-def get_notebook_executions(notebook_id: int, skip: int = 0, limit: int = 50, db: Session = Depends(get_db)):
-    """
-    Get execution history for a specific notebook
-    
-    Parameters:
-    - notebook_id: Notebook ID (path parameter)
-    - skip: Number of records to skip (query parameter, default: 0)
-    - limit: Maximum records to return (query parameter, default: 50)
-    
-    Example request:
-    GET /db/executions/notebook/5?limit=20
-    
-    Returns:
-    - Array of execution records for this notebook, ordered by started_at (newest first)
-    """
-    executions = db.query(NotebookExecution).filter(
-        NotebookExecution.notebook_id == notebook_id
-    ).order_by(NotebookExecution.started_at.desc()).offset(skip).limit(limit).all()
-    
-    return executions
-
-
-@app.get("/db/executions/{execution_id}", response_model=ExecutionHistoryResponse)
-def get_execution(execution_id: int, db: Session = Depends(get_db)):
-    """
-    Get details of a specific notebook execution
-    
-    Parameters:
-    - execution_id: Execution ID (path parameter)
-    
-    Example request:
-    GET /db/executions/123
-    
-    Returns:
-    - Execution record with all details:
-        * notebook_id, username
-        * input_path, output_path
-        * parameters_used (JSON)
-        * status, error_message
-        * execution_time_seconds
-        * started_at, completed_at timestamps
-    
-    Errors:
-    - 404: Execution not found
-    """
-    execution = db.query(NotebookExecution).filter(NotebookExecution.id == execution_id).first()
-    
-    if not execution:
-        raise HTTPException(status_code=404, detail="Execution not found")
-    
-    return execution
-
 
 # ==================== Notebook Submission/Creation Endpoints ====================
 

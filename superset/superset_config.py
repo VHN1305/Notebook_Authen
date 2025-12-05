@@ -199,7 +199,6 @@ SECRET_KEY = os.getenv('SUPERSET_SECRET_KEY', 'thisISaSECRET_1234')
 # The SQLAlchemy connection string to your database backend
 # This connection defines the path to the database that stores your
 # superset metadata (slices, connections, tables, dashboards, ...).
-# NOTE: This is ONLY for Superset's own metadata. User data is in notebook_manager.
 SQLALCHEMY_DATABASE_URI = os.getenv(
     'SQLALCHEMY_DATABASE_URI',
     'postgresql://mlflow:mlflow@host.docker.internal:5432/superset_db'

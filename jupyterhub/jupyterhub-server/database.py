@@ -10,7 +10,7 @@ import os
 # Database connection
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://mlflow:mlflow@localhost:5432/notebook_manager"
+    "postgresql://mlflow:mlflow@localhost:5432/mlflow_db"
 )
 
 engine = create_engine(DATABASE_URL)

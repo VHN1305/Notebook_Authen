@@ -13,7 +13,7 @@ POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
 POSTGRES_USER = os.getenv("POSTGRES_USER", "mlflow")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "mlflow")
 POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
-POSTGRES_DB = os.getenv("POSTGRES_DB", "notebook_manager")
+POSTGRES_DB = os.getenv("POSTGRES_DB", "mlflow_db")
 
 
 def create_database():
